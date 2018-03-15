@@ -40,12 +40,12 @@ Dependencias Python:
 python-m2crypto
     """,
     'data': [
-        'wizard/wsaa_load_config_view.xml',
-        'wsaa_view.xml',
+        'wizard/wsaa_config_renewal.xml',
+        'views/wsaa_view.xml',
         'security/ir.model.access.csv',
     ],
     'demo': [
-        'wsaa_demo.xml',
+        'demo/wsaa_demo.xml',
         ],
     'installable': True,
     'active': False,

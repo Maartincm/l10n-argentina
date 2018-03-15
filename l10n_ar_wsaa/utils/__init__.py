@@ -20,6 +20,4 @@
 #
 ##############################################################################
 
-import models # noqa
-import wizard # noqa
-import utils # noqa
+import wsaa_suds # noqa

@@ -44,7 +44,7 @@ class TestWSAA(TransactionCase):
         ta_vals = dict(name=self.wsaa_service.id, config_id=self.wsaa_demo.id)
         wsaa_ta = self.wsaa_ta.create(ta_vals)
 
-        with mock.patch('openerp.addons.l10n_ar_wsaa.wsaa_suds.Client', new=common.WSAA_Client) as mock_client:
+        with mock.patch('openerp.addons.l10n_ar_wsaa.utils.wsaa_suds.Client', new=common.WSAA_Client) as mock_client:
             suds_service = wsaa_ta.get_token_sign()
             self.assertEquals(len(suds_service), 2)
             self.assertEquals(suds_service[0], 'token_test')
