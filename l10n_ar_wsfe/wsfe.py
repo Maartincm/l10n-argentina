@@ -89,9 +89,12 @@ class wsfe_config(models.Model):
 
         return super(wsfe_config, self).create(cr, uid, vals, context)
 
-    # TODO: Cuando se borra esta configuracion
-    # debemos borrar el wsaa.ta correspondiente
-    #def unlink(self, cr, uid, ids):
+    @api.multi
+    def unlink(self):
+        for wsfe_conf in self:
+            wsfe_conf.wsaa_ticket_id.unlink()
+        res = super(wsfe_config, self).unlink()
+        return res
 
     @api.model
     def get_config(self):
