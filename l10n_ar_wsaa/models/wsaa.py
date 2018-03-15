@@ -23,7 +23,7 @@ from openerp import api, fields, models
 from openerp.osv import osv
 from openerp.tools.translate import _
 from datetime import datetime, timedelta
-from wsaa_suds import WSAA as wsaa
+from openerp.addons.l10n_ar_wsaa.utils.wsaa_suds import WSAA as wsaa
 from openerp import SUPERUSER_ID
 import pytz
 

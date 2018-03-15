@@ -5,7 +5,8 @@
 #    Copyright (c) 2013 E-MIPS (http://www.e-mips.com.ar) All Rights Reserved.
 #
 #    This program is free software: you can redistribute it and/or modify
-#    it under the terms of the GNU Affero General Public License as published by
+#    it under the terms of the GNU Affero General
+#    Public License as published by
 #    the Free Software Foundation, either version 3 of the License, or
 #    (at your option) any later version.
 #
@@ -20,55 +21,69 @@
 ##############################################################################
 
 from openerp.osv import osv, fields
+from openerp.tools.translate import _
 import base64
 from tempfile import TemporaryFile
 
+
 class wsaa_load_config(osv.osv_memory):
     _name = 'wsaa.load.config'
-    _inherit = 'res.config'
+
     _columns = {
-        'certificate': fields.binary('Certificate of Approval', help="You certificate (.crt)", filter="*.crt" , required=True),
-        'key': fields.binary('Private Key',help="You Privary Key Here" ,filter="*.key" , required=True),
-        'wsaa' : fields.char('URL for WSAA', size=60, required=True),
-        'company_id' : fields.many2one('res.company', 'Company Name' , required=True),
+        'certificate': fields.binary('Certificate of Approval',
+                                     help="You certificate (.crt)",
+                                     filter="*.crt"),
+        'cert_name': fields.char('Cert FileName'),
+        'key': fields.binary('Private Key',
+                             help="You Privary Key Here",
+                             filter="*.key"),
+        'key_name': fields.char('Key FileName'),
     }
 
-    def read_cert(self, cr, uid, certificate, context):
-        if not (certificate):
-            raise osv.except_osv( ('Error') , ('You must enter your Certification file'))
+    def read_file(self, cr, uid, ids, filename=False,
+                  filedata=False, ext=False, context={}):
+        if not filename or not filedata or not ext:
+            raise Exception('Wrong call parameters to `load_file` method')
+        if not (filedata):
+            raise osv.except_osv(_('Error'),
+                                 _('You must enter a File'))
+        pieces = filename.split('.')
+        if len(pieces) < 2 or pieces[-1] != ext:
+            raise osv.except_osv(_('Error'),
+                                 _('The Filename should end in ".%s"' % ext))
         fileobj = TemporaryFile('w+')
-        fileobj.write(base64.decodestring(certificate))
+        fileobj.write(base64.decodestring(filedata))
         fileobj.seek(0)
         lines = fileobj.read()
         fileobj.close()
         return lines
 
-    def read_key (self, cr, uid, key, context):
-        if not (key):
-            raise osv.except_osv( ('Error') , ('You must enter your Private Key file '))
-        fileobj = TemporaryFile('w+')
-        fileobj.write(base64.decodestring(key))
-        fileobj.seek(0)
-        lines = fileobj.read()
-        fileobj.close()
-        return lines
+    def load_cert(self, cr, uid, ids, context={}):
+        form_id = context.get('active_ids', False)
+        if not form_id or len(form_id) != 1:
+            raise Exception('Wizard method call without `active_ids` in ctx')
+        wiz = self.browse(cr, uid, ids, context)
+        certificate = wiz.certificate
+        cert_name = wiz.cert_name
+        filedata = self.read_file(cr, uid, ids, cert_name,
+                                  certificate, 'crt', context)
+        wsaa_config_obj = self.pool['wsaa.config']
+        write_vals = {
+            'certificate': filedata,
+        }
+        wsaa_config_obj.write(cr, uid, form_id, write_vals, context)
 
-    def execute(self, cr, uid, ids, context=None):
-        data = self.browse(cr, uid, ids, context=context)[0]
-        wsaa_url = data.wsaa
-        if not ( wsaa_url.endswith('?wsdl') ):
-            wsaa_url+='?wsdl'
-
-        wsaa_config_obj = self.pool.get('wsaa.config')
-        cer     = self.read_cert(cr, uid, data.certificate, context=context)
-        key       = self.read_key(cr, uid, data.key, context=context)
-        comp    = data.company_id
-        res     = wsaa_config_obj.search(cr, uid , [('company_id','=', comp.id)])
-
-        if not len(res):
-            wsaa_config_obj.create(cr, uid , {'certificate': cer, 'key': key, 'url': wsaa_url, 'company_id': comp.id  }
-            , context={})
-        else :
-            wsaa_config_obj.write(cr, uid , res[0],  {'certificate': cer, 'key': key, 'url': wsaa_url, 'company_id': comp.id  } )
-
-wsaa_load_config()
+    def load_key(self, cr, uid, ids, context={}):
+        form_id = context.get('active_ids', False)
+        if not form_id or len(form_id) != 1:
+            raise Exception('Wizard method call without `active_ids` in ctx')
+        wiz = self.browse(cr, uid, ids, context)
+        key = wiz.key
+        key_name = wiz.key_name
+        filedata = self.read_file(cr, uid, ids, key_name,
+                                  key, 'key', context)
+        wsaa_config_obj = self.pool['wsaa.config']
+        write_vals = {
+            'key': filedata,
+        }
+        wsaa_config_obj.write(cr, uid, form_id, write_vals, context)

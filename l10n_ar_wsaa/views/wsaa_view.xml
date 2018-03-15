@@ -46,9 +46,27 @@
 								</field>
 							</page>
 							<page string="Security Info" groups="account.group_account_manager">
-								<separator string="Certificate" colspan="4"/>
+								<separator string="Certificate" colspan="4" class="oe_inline"/>
+                                <div class="oe_right oe_button_box oe_inline">
+                                    <button type="action"
+                                        class="oe_stat_button"
+                                        id="wsaa_certificate_renewal"
+                                        icon="fa-certificate"
+                                        name="%(certificate_renewal_wizard_action)d">
+                                        <div><strong>Load Certificate</strong></div>
+                                    </button>
+                                </div>
 								<field name="certificate" colspan="4" nolabel="1" height="200"/>
-								<separator string="Key" colspan="4"/>
+								<separator string="Key" colspan="4" class="oe_inline"/>
+                                <div class="oe_right oe_button_box oe_inline">
+                                    <button type="action"
+                                        class="oe_stat_button"
+                                        id="wsaa_certificate_renewal"
+                                        icon="fa-key"
+                                        name="%(key_renewal_wizard_action)d">
+                                        <div><strong>Load Key</strong></div>
+                                    </button>
+                                </div>
 								<field name="key" colspan="4" nolabel="1" height="200"/>
 							</page>
 						</notebook>
