@@ -185,6 +185,13 @@ class wsfex_config(models.Model):
 
         return super(wsfex_config, self).create(cr, uid, vals, context)
 
+    @api.multi
+    def unlink(self):
+        for wsfex_conf in self:
+            wsfex_conf.wsaa_ticket_id.unlink()
+        res = super(wsfex_config, self).unlink()
+        return res
+
     def get_config(self):
         # Obtenemos la compania que esta utilizando en este momento este usuario
         company_id = self.env.user.company_id.id
