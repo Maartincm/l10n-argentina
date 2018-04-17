@@ -180,8 +180,6 @@ class account_invoice(models.Model):
     def action_number(self):
         wsfe_conf_obj = self.env['wsfe.config']
         wsfex_conf_obj = self.env['wsfex.config']
-        wsfe_conf = wsfe_conf_obj.get_config()
-        wsfex_conf = wsfex_conf_obj.get_config()
 
         next_number = None
         invoice_vals = {}
@@ -192,6 +190,14 @@ class account_invoice(models.Model):
         self.write({})
 
         for obj_inv in self:
+            local = obj_inv.local
+            ctx = self.env.context.copy()
+            if local:
+                ctx['without_raise'] = True
+            wsfe_conf = wsfe_conf_obj.with_context(ctx).get_config()
+            if not local:
+                ctx = {}
+            wsfex_conf = wsfex_conf_obj.with_context(ctx).get_config()
             invtype = obj_inv.type
 
             # Chequeamos si es local por medio de la posicion fiscal
@@ -310,16 +316,22 @@ class account_invoice(models.Model):
         voucher_type_obj = self.env['wsfe.voucher_type']
 
         wsfe_conf_obj = self.env['wsfe.config']
-        wsfe_conf = wsfe_conf_obj.get_config()
 
         wsfex_conf_obj = self.env['wsfex.config']
-        wsfex_conf = wsfex_conf_obj.get_config()
 
         for inv in self:
             if not inv.aut_cae:
                 #self.write(cr, uid, ids, {'cae' : 'NA'})
                 return True
 
+            local = inv.local
+            ctx = self.env.context.copy()
+            if local:
+                ctx['without_raise'] = True
+            wsfe_conf = wsfe_conf_obj.with_context(ctx).get_config()
+            if not local:
+                ctx = {}
+            wsfex_conf = wsfex_conf_obj.with_context(ctx).get_config()
             self._sanitize_taxes(inv)
             pos_ar = inv.pos_ar_id
             # Chequeamos si corresponde Factura Electronica
