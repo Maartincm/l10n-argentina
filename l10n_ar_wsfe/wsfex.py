@@ -195,11 +195,12 @@ class wsfex_config(models.Model):
     def get_config(self):
         # Obtenemos la compania que esta utilizando en este momento este usuario
         company_id = self.env.user.company_id.id
-        if not company_id:
+        without_raise = self.env.context.get('without_raise', False)
+        if not company_id and not without_raise:
             raise osv.except_osv(_('Company Error!'), _('There is no company being used by this user'))
 
         ids = self.search([('company_id','=',company_id)])
-        if not ids:
+        if not ids and not without_raise:
             raise osv.except_osv(_('WSFEX Config Error!'), _('There is no WSFEX configuration set to this company'))
 
         return ids
