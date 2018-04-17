@@ -8,7 +8,8 @@
 #    All Rights Reserved. See AUTHORS for details.
 #
 #    This program is free software: you can redistribute it and/or modify
-#    it under the terms of the GNU Affero General Public License as published by
+#    it under the terms of the GNU Affero General
+#    Public License as published by
 #    the Free Software Foundation, either version 3 of the License, or
 #    (at your option) any later version.
 #
@@ -25,9 +26,8 @@
 from openerp.osv import osv
 from openerp import models, fields, api
 from openerp.tools.translate import _
-from wsfetools.wsfex_suds import WSFEX as wsfex
+from openerp.addons.l10n_ar_wsfe.wsfetools.wsfex_suds import WSFEX as wsfex
 from datetime import datetime
-import time
 
 
 class wsfex_shipping_permission(models.Model):

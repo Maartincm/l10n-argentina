@@ -1,11 +1,8 @@
-# -*- encoding: utf-8 -*-
+# -*- coding: utf-8 -*-
 ##############################################################################
 #
 #    OpenERP, Open Source Management Solution
-#    Copyright (c) 2015 E-MIPS (http://www.e-mips.com.ar)
-#    Copyright (c) 2015 Eynes (http://www.eynes.com.ar)
-#    Copyright (c) 2015 Aconcagua Team (http://www.proyectoaconcagua.com.ar)
-#    All Rights Reserved. See AUTHORS for details.
+#    Copyright (c) 2013 E-MIPS (http://www.e-mips.com.ar) All Rights Reserved.
 #
 #    This program is free software: you can redistribute it and/or modify
 #    it under the terms of the GNU Affero General
@@ -23,5 +20,7 @@
 #
 ##############################################################################
 
-import wsfe_suds  # noqa
-import wsfex_suds  # noqa
+import invoice  # noqa
+import wsfe  # noqa
+import wsfex  # noqa
+import wsfe_request  # noqa
