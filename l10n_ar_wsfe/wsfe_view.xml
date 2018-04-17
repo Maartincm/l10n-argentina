@@ -24,7 +24,15 @@
 						</group>
 						<notebook colspan="4">
 							<page string="Points Of Sale">
-							  <field name="point_of_sale_ids" nolabel="1"/>
+                                <field name="point_of_sale_ids" nolabel="1"
+                                        options="{'no_create_edit': True, 'no_quick_create': True}">
+                                    <tree string="Points of Sale" editable="bottom">
+                                        <field name="name" readonly="True"/>
+                                        <field name="denomination_id" readonly="True"/>
+                                        <field name="priority" readonly="True"/>
+                                        <field name="shop_id" readonly="True"/>
+                                    </tree>
+                                </field>
 							</page>
 							<page string="VAT Taxes">
 								<field name="vat_tax_ids" nolabel="1">
