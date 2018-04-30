@@ -26,7 +26,7 @@ import common
 from openerp.tests.common import TransactionCase
 from openerp.addons.l10n_ar_wsaa.tests.common import WSAA_Client
 from openerp.addons.l10n_ar_wsfe.tests.common import WSFE_Client
-from openerp.addons.l10n_ar_wsfe.wsfe_suds import WSFEv1
+from openerp.addons.l10n_ar_wsfe.wsfetools.wsfe_suds import WSFEv1
 from openerp import SUPERUSER_ID
 
 class TestWSFE(TransactionCase):
