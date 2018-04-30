@@ -5,7 +5,8 @@
 #    Copyright (c) 2013 E-MIPS (http://www.e-mips.com.ar) All Rights Reserved.
 #
 #    This program is free software: you can redistribute it and/or modify
-#    it under the terms of the GNU Affero General Public License as published by
+#    it under the terms of the GNU Affero General
+#    Public License as published by
 #    the Free Software Foundation, either version 3 of the License, or
 #    (at your option) any later version.
 #
@@ -25,50 +26,142 @@ from openerp import _, api, exceptions, fields, models, pooler
 from openerp.exceptions import except_orm
 from openerp.osv import osv
 
+from openerp.addons.connector.queue.job import job
+from openerp.addons.connector.session import ConnectorSession
+
+import logging
+_logger = logging.getLogger(__name__)
+
 __author__ = "Sebastian Kennedy <skennedy@e-mips.com.ar>"
+
+
+@job(default_channel='root.general')
+def validate_invoice(session, model_name, record_id):
+    self = session.env[model_name].browse(record_id)
+    _logger.info(_('User `%s` Begun an Invoice Validation for the ID: %s')
+                 % (self.env.user.name, record_id))
+    self.action_date_assign()
+    self.action_move_create()
+    self.queue('send_to_afip')
+
+
+@job(default_channel='root.invoice')
+def send_to_afip(session, model_name, record_id):
+    self = session.env[model_name].browse(record_id)
+    self.action_number()
+    _logger.info(_('Sending Invoice `%s` To Afip') % self.internal_number)
+    self.action_aut_cae()
+    self.signal_workflow('approved_invoice')
+
+
+connector_methods = {
+    'validate_invoice': validate_invoice,
+    'send_to_afip': send_to_afip,
+}
 
 
 class account_invoice(models.Model):
     _name = "account.invoice"
     _inherit = "account.invoice"
 
-    aut_cae = fields.Boolean('Autorizar', default=False, help='Pedido de autorizacion a la AFIP')
-    cae = fields.Char('CAE/CAI', size=32, required=False, help='CAE (Codigo de Autorizacion Electronico assigned by AFIP.)')
-    cae_due_date = fields.Date('CAE Due Date', required=False, help='Fecha de vencimiento del CAE')
-    #'associated_inv_ids': fields.many2many('account.invoice', )
-    associated_inv_ids = fields.Many2many('account.invoice', 'account_invoice_associated_rel', 'invoice_id', 'refund_debit_id')
+###############################################################################
+
+    # This block should be merged with Odoo API
+
+    @api.model
+    def get_connector_session(self):
+        s = ConnectorSession(
+            self._cr, self.env.user.id, context=self.env.context)
+        return s
+
+    session = get_connector_session
+
+    @api.multi
+    def queue(self, job, **kwargs):
+        method = connector_methods.get(job, False)
+        if not method:
+            raise Exception(_("Method %s is not defined in file %s") %
+                            (job, __file__))
+        method.delay(self.session(), self._name, self.id, **kwargs)
+
+
+###############################################################################
+
+    aut_cae = fields.Boolean('Autorizar', default=False,
+                             help='Pedido de autorizacion a la AFIP')
+    cae = fields.Char(
+        string='CAE/CAI', size=32, required=False,
+        help='CAE (Codigo de Autorizacion Electronico assigned by AFIP.)')
+    cae_due_date = fields.Date('CAE Due Date', required=False,
+                               help='Fecha de vencimiento del CAE')
+    associated_inv_ids = fields.Many2many(
+        'account.invoice', 'account_invoice_associated_rel',
+        'invoice_id', 'refund_debit_id')
 
     # Campos para facturas de exportacion. Aca ninguno es requerido,
-    # eso lo hacemos en la vista ya que depende de si es o no factura de exportacion
+    # eso lo hacemos en la vista ya que depende de
+    # si es o no factura de exportacion
     export_type_id = fields.Many2one('wsfex.export_type.codes', 'Export Type')
     dst_country_id = fields.Many2one('wsfex.dst_country.codes', 'Dest Country')
     dst_cuit_id = fields.Many2one('wsfex.dst_cuit.codes', 'Country CUIT')
-    shipping_perm_ids = fields.One2many('wsfex.shipping.permission', 'invoice_id', 'Shipping Permissions')
-    incoterm_id = fields.Many2one('stock.incoterms', 'Incoterm', help="International Commercial Terms are a series of predefined commercial terms used in international transactions.")
+    shipping_perm_ids = fields.One2many('wsfex.shipping.permission',
+                                        'invoice_id', 'Shipping Permissions')
+    incoterm_id = fields.Many2one(
+        'stock.incoterms', 'Incoterm',
+        help="International Commercial Terms are a series of predefined commercial terms used in international transactions.")  # noqa
     wsfe_request_ids = fields.One2many('wsfe.request.detail', 'name')
     wsfex_request_ids = fields.One2many('wsfex.request.detail', 'invoice_id')
 
+    state = fields.Selection([
+            ('draft', _('Draft')),
+            ('proforma', _('Pro-forma')),
+            ('proforma2', _('Pro-forma')),
+            ('waiting', _('Waiting')),
+            ('open', _('Open')),
+            ('rejected', _('Rejected')),
+            ('paid', _('Paid')),
+            ('cancel', _('Cancelled')),
+        ], string='Status', index=True, readonly=True, default='draft',
+        track_visibility='onchange', copy=False,
+        help=" * The 'Draft' status is used when a user is encoding a new and unconfirmed Invoice.\n"  # noqa
+             " * The 'Pro-forma' when invoice is in Pro-forma status,invoice does not have an invoice number.\n"  # noqa
+             " * The 'Open' status is used when user create invoice,a invoice number is generated.Its in open status till user does not pay invoice.\n"  # noqa
+             " * The 'Paid' status is set automatically when the invoice is paid. Its related journal entries may or may not be reconciled.\n"  # noqa
+             " * The 'Cancelled' status is used when user cancel invoice.")
+
+    @api.multi
+    def queue_invoice(self):
+        self.ensure_one()
+        self.write({'state': 'waiting'})
+        self.queue('validate_invoice')
+
     @api.multi
     def onchange_partner_id(self, type, partner_id, date_invoice=False,
-            payment_term=False, partner_bank_id=False, company_id=False):
-
-        res = super(account_invoice, self).onchange_partner_id(type, partner_id,\
-                    date_invoice=False, payment_term=False, partner_bank_id=False, company_id=False)
+                            payment_term=False, partner_bank_id=False,
+                            company_id=False):
+        res = super(account_invoice, self).onchange_partner_id(
+            type, partner_id, date_invoice=False, payment_term=False,
+            partner_bank_id=False, company_id=False)
 
         if partner_id:
             partner = self.env['res.partner'].browse(partner_id)
             country_id = partner.country_id.id or False
             if country_id:
-                dst_country = self.env['wsfex.dst_country.codes'].search([('country_id','=',country_id)])
+                dst_country = self.env['wsfex.dst_country.codes'].search(
+                    [('country_id', '=', country_id)])
 
                 if dst_country:
                     res['value'].update({'dst_country_id': dst_country[0].id})
         return res
 
-    # Esto lo hacemos porque al hacer una nota de credito, no le setea la fiscal_position
+    # Esto lo hacemos porque al hacer una nota de credito,
+    # no le setea la fiscal_position.
     # Ademas, seteamos el comprobante asociado
-    def refund(self, cr, uid, ids, date=None, period_id=None, description=None, journal_id=None, context=None):
-        new_ids = super(account_invoice, self).refund(cr, uid, ids, date, period_id, description, journal_id, context=context)
+    def refund(self, cr, uid, ids, date=None, period_id=None,
+               description=None, journal_id=None, context=None):
+        new_ids = super(account_invoice, self).refund(
+            cr, uid, ids, date, period_id,
+            description, journal_id, context=context)
 
         for refund_id in new_ids:
             vals = {}
@@ -96,35 +189,43 @@ class account_invoice(models.Model):
         self.ensure_one()
         inv = self
         # Si es factura de cliente
-        denomination_id = inv.denomination_id and inv.denomination_id.id or False
+        denomination_id = inv.denomination_id and \
+            inv.denomination_id.id or False
         if inv.type in ('out_invoice', 'out_refund'):
-
             if not denomination_id:
-                raise except_orm(_('Error!'), _('Denomination not set in invoice'))
+                raise except_orm(_('Error!'),
+                                 _('Denomination not set in invoice'))
 
             if inv.pos_ar_id.denomination_id.id != denomination_id:
-                raise except_orm(_('Error!'), _('Point of sale has not the same denomination as the invoice.'))
+                err = _('Point of sale has not the same ' +
+                        'denomination as the invoice.')
+                raise except_orm(_('Error!'), err)
 
             # Chequeamos que la posicion fiscal y la denomination_id coincidan
             if inv.fiscal_position.denomination_id.id != denomination_id:
-                raise except_orm(_('Error'),
-                                     _('The invoice denomination does not corresponds with this fiscal position.'))
+                err = _('The invoice denomination does ' +
+                        'not corresponds with this fiscal position.')
+                raise except_orm(_('Error'), err)
 
         # Si es factura de proveedor
         else:
             if not denomination_id:
-                raise except_orm(_('Error!'), _('Denomination not set in invoice'))
+                raise except_orm(_('Error!'),
+                                 _('Denomination not set in invoice'))
 
             # Chequeamos que la posicion fiscal y la denomination_id coincidan
-            if inv.fiscal_position.denom_supplier_id.id != inv.denomination_id.id:
-                raise except_orm(_('Error'),
-                                     _('The invoice denomination does not corresponds with this fiscal position.'))
-
-        # Chequeamos que la posicion fiscal de la factura y del cliente tambien coincidan
-        if inv.fiscal_position.id != inv.partner_id.property_account_position.id:
-            raise except_orm(_('Error'),
-                                 _('The invoice fiscal position is not the same as the partner\'s fiscal position.'))
-
+            if inv.fiscal_position.denom_supplier_id.id != \
+                    inv.denomination_id.id:
+                err = _('The invoice denomination does not ' +
+                        'corresponds with this fiscal position.')
+                raise except_orm(_('Error'), err)
+        # Chequeamos que la posicion fiscal de la factura
+        # y la del cliente tambien coincidan
+        if inv.fiscal_position.id != \
+                inv.partner_id.property_account_position.id:
+            err = _('The invoice fiscal position is not ' +
+                    'the same as the partner\'s fiscal position.')
+            raise except_orm(_('Error'), err)
         return True
 
     @api.multi
@@ -138,7 +239,8 @@ class account_invoice(models.Model):
         try:
             pto_vta = int(inv.pos_ar_id.name)
         except ValueError:
-            raise except_orm('Error', 'El nombre del punto de venta tiene que ser numerico')
+            err = _('El nombre del punto de venta tiene que ser numerico')
+            raise except_orm(_('Error'), err)
 
         res = conf.get_last_voucher(pto_vta, tipo_cbte)
 
@@ -146,12 +248,33 @@ class account_invoice(models.Model):
 
     @api.multi
     def get_next_invoice_number(self):
-        """Funcion para obtener el siguiente numero de comprobante correspondiente en el sistema"""
+        """
+        Funcion para obtener el siguiente numero de comprobante
+        correspondiente en el sistema
+        """
         self.ensure_one()
         invoice = self
         cr = self.env.cr
-        # Obtenemos el ultimo numero de comprobante para ese pos y ese tipo de comprobante
-        cr.execute("select max(to_number(substring(internal_number from '[0-9]{8}$'), '99999999')) from account_invoice where internal_number ~ '^[0-9]{4}-[0-9]{8}$' and pos_ar_id=%s and state in %s and type=%s and is_debit_note=%s", (invoice.pos_ar_id.id, ('open', 'paid', 'cancel',), invoice.type, invoice.is_debit_note))
+        # Obtenemos el ultimo numero de comprobante
+        # para ese pos y ese tipo de comprobante
+        q = """
+        SELECT MAX(TO_NUMBER(
+            SUBSTRING(internal_number FROM '[0-9]{8}$'), '99999999')
+            )
+        FROM account_invoice
+        WHERE internal_number ~ '^[0-9]{4}-[0-9]{8}$'
+            AND pos_ar_id = %(pos_id)s
+            AND state in %(state)s
+            AND type = %(type)s
+            AND is_debit_note = %(is_debit_note)s
+        """
+        q_vals = {
+            'pos_id': invoice.pos_ar_id.id,
+            'state': ('open', 'paid', 'cancel',),
+            'type': invoice.type,
+            'is_debit_note': invoice.is_debit_note,
+        }
+        cr.execute(q, q_vals)
         last_number = cr.fetchone()
         self.env.invalidate_all()
 
@@ -168,12 +291,9 @@ class account_invoice(models.Model):
     def action_cancel(self):
         for inv in self:
             if inv.aut_cae:
-                err = _("You cannot cancel an Electronic Invoice because it has been informed to A"
-                        "FIP.")
+                err = _("You cannot cancel an Electronic Invoice " +
+                        "because it has been informed to AFIP.")
                 raise exceptions.ValidationError(err)
-
-        #ctx = dict(self.env.context)
-        #return super(account_invoice, self).with_context(ctx).action_cancel()
         return super(account_invoice, self).action_cancel()
 
     @api.multi
@@ -211,7 +331,8 @@ class account_invoice(models.Model):
                 # Chequeamos los valores fiscales
                 self._check_fiscal_values()
 
-            # si el usuario no ingreso un numero, busco el ultimo y lo incremento , si no hay ultimo va 1.
+            # si el usuario no ingreso un numero,
+            # busco el ultimo y lo incremento , si no hay ultimo va 1.
             # si el usuario hizo un ingreso dejo ese numero
             internal_number = obj_inv.internal_number
             next_number = False
@@ -223,11 +344,15 @@ class account_invoice(models.Model):
                 next_number = self.get_next_invoice_number()
 
                 # Chequeamos si corresponde Factura Electronica
-                # Aca nos fijamos si el pos_ar_id tiene factura electronica asignada
-                confs = filter(lambda c: pos_ar in c.point_of_sale_ids, [wsfe_conf, wsfex_conf]) #_get_ws_conf(obj_inv.pos_ar_id)
+                # Aca nos fijamos si el pos_ar_id tiene
+                # factura electronica asignada
+                confs = filter(lambda c: pos_ar in c.point_of_sale_ids,
+                               [wsfe_conf, wsfex_conf])
 
-                if len(confs)>1:
-                    raise osv.except_osv(_("WSFE Error"), _("There is more than one configuration with this POS %s") % pos_ar.name)
+                if len(confs) > 1:
+                    err = _("There is more than one configuration " +
+                            "with this POS %s") % pos_ar.name
+                    raise osv.except_osv(_("WSFE Error"), err)
 
                 if confs:
                     conf = confs[0]
@@ -237,13 +362,18 @@ class account_invoice(models.Model):
                     # Si es homologacion, no hacemos el chequeo del numero
                     if not conf.homologation:
                         if fe_next_number != next_number:
-                            raise except_orm(_("WSFE Error!"), _("The next number [%d] does not corresponds to that obtained from AFIP WSFE [%d]") % (int(next_number), int(fe_next_number)))
+                            err = _("The next number [%d] does not " +
+                                    "corresponds to that obtained from AFIP " +
+                                    "WSFE [%d]") % (
+                                        int(next_number), int(fe_next_number))
+                            raise except_orm(_("WSFE Error!"), err)
                     else:
                         next_number = fe_next_number
 
                 # Si no es Factura Electronica...
                 else:
-                    # Nos fijamos si el usuario dejo en blanco el campo de numero de factura
+                    # Nos fijamos si el usuario dejo en
+                    # blanco el campo de numero de factura
                     if obj_inv.internal_number:
                         internal_number = obj_inv.internal_number
 
@@ -253,7 +383,9 @@ class account_invoice(models.Model):
 
                 m = re.match('^[0-9]{4}-[0-9]{8}$', internal_number)
                 if not m:
-                    raise except_orm(_('Error'), _('The Invoice Number should be the format XXXX-XXXXXXXX'))
+                    err = _('The Invoice Number should be the ' +
+                            'format XXXX-XXXXXXXX')
+                    raise except_orm(_('Error'), err)
 
                 # Escribimos el internal number
                 invoice_vals['internal_number'] = internal_number
@@ -261,12 +393,16 @@ class account_invoice(models.Model):
             # Si son de Proveedor
             else:
                 if not obj_inv.internal_number:
-                    raise except_orm(_('Error'), _('The Invoice Number should be filled'))
+                    err = _('The Invoice Number should be filled')
+                    raise except_orm(_('Error'), err)
 
                 if local:
-                    m = re.match('^[0-9]{4}-[0-9]{8}$', obj_inv.internal_number)
+                    m = re.match('^[0-9]{4}-[0-9]{8}$',
+                                 obj_inv.internal_number)
                     if not m:
-                        raise except_orm(_('Error'), _('The Invoice Number should be the format XXXX-XXXXXXXX'))
+                        err = _('The Invoice Number should be ' +
+                                'the format XXXX-XXXXXXXX')
+                        raise except_orm(_('Error'), err)
 
             # Escribimos los campos necesarios de la factura
             obj_inv.write(invoice_vals)
@@ -277,16 +413,11 @@ class account_invoice(models.Model):
             else:
                 ref = '%s [%s]' % (invoice_name, reference)
 
-            # Actulizamos el campo reference del move_id correspondiente a la creacion de la factura
+            # Actulizamos el campo reference del move_id
+            # correspondiente a la creacion de la factura
             obj_inv._update_reference(ref)
 
         return True
-
-#    def wsfe_invoice_prepare_detail(self, cr, uid, ids, conf, context=None):
-#        conf_obj = conf._model
-#
-#        details = conf_obj.prepare_details(cr, uid, conf, ids, context=context)
-#        return details
 
     @api.model
     def hook_add_taxes(self, inv, detalle):
@@ -294,10 +425,11 @@ class account_invoice(models.Model):
 
     def _sanitize_taxes(self, invoice):
 
-        # Sanitize taxes: puede pasar que tenga un IVA con un monto de impuesto 0.0
+        # Sanitize taxes: puede pasar que tenga un
+        # IVA con un monto de impuesto 0.0
         # Esto pasa porque el monto sobre el que se aplica es muy chico.
         # Quitamos el impuesto
-        zero_taxes = invoice.tax_line.filtered(lambda x: x.amount==0.0)
+        zero_taxes = invoice.tax_line.filtered(lambda x: x.amount == 0.0)
 
         if not zero_taxes:
             return
@@ -321,7 +453,6 @@ class account_invoice(models.Model):
 
         for inv in self:
             if not inv.aut_cae:
-                #self.write(cr, uid, ids, {'cae' : 'NA'})
                 return True
 
             local = inv.local
@@ -335,16 +466,22 @@ class account_invoice(models.Model):
             self._sanitize_taxes(inv)
             pos_ar = inv.pos_ar_id
             # Chequeamos si corresponde Factura Electronica
-            # Aca nos fijamos si el pos_ar_id tiene factura electronica asignada
-            confs = filter(lambda c: pos_ar in c.point_of_sale_ids, [wsfe_conf, wsfex_conf]) #_get_ws_conf(obj_inv.pos_ar_id)
+            # Aca nos fijamos si el pos_ar_id tiene
+            # factura electronica asignada
+            confs = filter(lambda c: pos_ar in c.point_of_sale_ids,
+                           [wsfe_conf, wsfex_conf])
 
-            if len(confs)>1:
-                raise osv.except_osv(_("WSFE Error"), _("There is more than one configuration with this POS %s") % pos_ar.name)
+            if len(confs) > 1:
+                err = _("There is more than one configuration " +
+                        "with this POS %s") % pos_ar.name
+                raise osv.except_osv(_("WSFE Error"), err)
 
             if confs:
                 conf = confs[0]
             else:
-                raise osv.except_osv(_("WSFE Error"), _("There is no configuration for this POS %s") % pos_ar.name)
+                err = _("There is no configuration for this " +
+                        "POS %s") % pos_ar.name
+                raise osv.except_osv(_("WSFE Error"), err)
 
             # Obtenemos el tipo de comprobante
             tipo_cbte = voucher_type_obj.get_voucher_type(inv)
@@ -363,9 +500,9 @@ class account_invoice(models.Model):
 
             new_cr = False
             try:
-                invoices_approbed = conf._parse_result([inv], result)
+                invoices_approved = conf._parse_result([inv], result)
 
-                for invoice_id, invoice_vals in invoices_approbed.iteritems():
+                for invoice_id, invoice_vals in invoices_approved.iteritems():
                     inv_obj = self.env['account.invoice'].browse(invoice_id)
                     inv_obj.write(invoice_vals)
             except Exception as e:
@@ -373,8 +510,10 @@ class account_invoice(models.Model):
                 self.env.cr.rollback()
                 raise e
             finally:
-                # Creamos el wsfe.request con otro cursor, porque puede pasar que
-                # tengamos una excepcion e igualmente, tenemos que escribir la request
+                # Creamos el wsfe.request con otro cursor,
+                # porque puede pasar que
+                # tengamos una excepcion e igualmente,
+                # tenemos que escribir la request
                 # Sino al hacer el rollback se pierde hasta el wsfe.request
                 if new_cr:
                     cr2 = pooler.get_db(new_cr).cursor()
@@ -382,7 +521,8 @@ class account_invoice(models.Model):
                     cr2 = self.env.cr
 
                 new_env = conf.env(cr=cr2)
-                conf.with_env(new_env)._log_wsfe_request(pos, tipo_cbte, fe_det_req, result)
+                conf.with_env(new_env)._log_wsfe_request(
+                    pos, tipo_cbte, fe_det_req, result)
                 if new_cr:
                     cr2.commit()
                     cr2.close()
@@ -390,7 +530,7 @@ class account_invoice(models.Model):
 
     @api.multi
     def _parse_result(self, result):
-        invoices_approbed = {}
+        invoices_approved = {}
 
         # Verificamos el resultado de la Operacion
         # Si no fue aprobado
@@ -400,8 +540,8 @@ class account_invoice(models.Model):
                 msg = 'Errores: ' + '\n'.join(result['Errores']) + '\n'
 
             if self._context.get('raise-exception', True):
-                raise except_orm(_('AFIP Web Service Error'),
-                                     _('La factura no fue aprobada. \n%s') % msg)
+                err = _('La factura no fue aprobada. \n%s') % msg
+                raise except_orm(_('AFIP Web Service Error'), err)
 
         elif result['Resultado'] == 'A' or result['Resultado'] == 'P':
             index = 0
@@ -411,40 +551,45 @@ class account_invoice(models.Model):
                 if comp['Observaciones']:
                     msg = 'Observaciones: ' + '\n'.join(comp['Observaciones'])
 
-                    # Escribimos en el log del cliente web
-                    #self.log(cr, uid, inv.id, msg, context)
+                # Si es un contacto, tomamos el partner que
+                # es el que tiene la informacion contable
+                partner_id = inv.partner_id.parent_id and \
+                    inv.partner_id.parent_id or inv.partner_id
 
-                # Si es un contacto, tomamos el partner que es el que tiene la informacion contable
-                partner_id = inv.partner_id.parent_id and inv.partner_id.parent_id or inv.partner_id
-
-                # Chequeamos que se corresponda con la factura que enviamos a validar
-                doc_type = partner_id.document_type_id and partner_id.document_type_id.afip_code or '99'
+                # Chequeamos que se corresponda con
+                # la factura que enviamos a validar
+                doc_type = partner_id.document_type_id and \
+                    partner_id.document_type_id.afip_code or '99'
                 doc_tipo = comp['DocTipo'] == int(doc_type)
                 doc_num = comp['DocNro'] == int(partner_id.vat)
                 cbte = True
                 if inv.internal_number:
-                    cbte = comp['CbteHasta'] == int(inv.internal_number.split('-')[1])
+                    cbte = comp['CbteHasta'] == int(inv.internal_number.
+                                                    split('-')[1])
                 else:
-                    # TODO: El nro de factura deberia unificarse para que se setee en una funcion
-                    # o algo asi para que no haya posibilidad de que sea diferente nunca en su formato
-                    invoice_vals['internal_number'] = '%04d-%08d' % (result['PtoVta'], comp['CbteHasta'])
+                    # TODO: El nro de factura deberia unificarse
+                    # para que se setee en una funcion
+                    # o algo asi para que no haya posibilidad de que
+                    # sea diferente nunca en su formato
+                    invoice_vals['internal_number'] = '%04d-%08d' % \
+                        (result['PtoVta'], comp['CbteHasta'])
 
                 if not all([doc_tipo, doc_num, cbte]):
-                    raise except_orm(_("WSFE Error!"), _("Validated invoice that not corresponds!"))
+                    err = _("Validated invoice that not corresponds!")
+                    raise except_orm(_("WSFE Error!"), err)
 
                 if comp['Resultado'] == 'A':
                     invoice_vals['cae'] = comp['CAE']
                     invoice_vals['cae_due_date'] = comp['CAEFchVto']
-                    invoices_approbed[inv.id] = invoice_vals
-                    #self.write(cr, uid, inv.id, invoice_vals)
-                    # invoices_approbed.append(inv.id)
+                    invoices_approved[inv.id] = invoice_vals
 
                 index += 1
 
-        return invoices_approbed
+        return invoices_approved
 
     @api.one
-    def wsfe_relate_invoice(self, pos, number, date_invoice, cae, cae_due_date):
+    def wsfe_relate_invoice(self, pos, number, date_invoice,
+                            cae, cae_due_date):
         # Tomamos la factura y mandamos a realizar
         # el asiento contable primero.
         self.action_move_create()
@@ -465,14 +610,13 @@ class account_invoice(models.Model):
         else:
             ref = '%s [%s]' % (invoice_name, self.reference)
 
-        # Actulizamos el campo reference del move_id correspondiente a la creacion de la factura
+        # Actulizamos el campo reference del move_id
+        # correspondiente a la creacion de la factura
         self._update_reference(ref)
 
         # Llamamos al workflow para que siga su curso
         self.signal_workflow('invoice_massive_open')
         return
-
-account_invoice()
 
 
 class account_invoice_tax(models.Model):
@@ -482,7 +626,8 @@ class account_invoice_tax(models.Model):
     @api.multi
     def hook_compute_invoice_taxes(self, invoice, tax_grouped):
         tax_obj = self.env['account.tax']
-        currency = invoice.currency_id.with_context(date=invoice.date_invoice or fields.Date.context_today(invoice))
+        currency = invoice.currency_id.with_context(
+            date=invoice.date_invoice or fields.Date.context_today(invoice))
 
         for t in tax_grouped.values():
             # Para solucionar el problema del redondeo con AFIP
@@ -495,6 +640,5 @@ class account_invoice_tax(models.Model):
             t['base_amount'] = currency.round(t['base_amount'])
             t['tax_amount'] = currency.round(t['tax_amount'])
 
-        return super(account_invoice_tax, self).hook_compute_invoice_taxes(invoice, tax_grouped)
-
-account_invoice_tax()
+        return super(account_invoice_tax, self).\
+            hook_compute_invoice_taxes(invoice, tax_grouped)

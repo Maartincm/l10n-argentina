@@ -28,8 +28,8 @@ from openerp.tests.common import TransactionCase
 from openerp.addons.l10n_ar_wsfe.tests.common import WSFE_Client, \
                                                      WSFE_ConfigTest, \
                                                      test_invoices
-from openerp.addons.l10n_ar_wsfe.wsfe_suds import WSFEv1
-from openerp.addons.l10n_ar_wsfe.wsfe import wsfe_config
+from openerp.addons.l10n_ar_wsfe.wsfetools.wsfe_suds import WSFEv1
+from openerp.addons.l10n_ar_wsfe.models.wsfe import wsfe_config
 
 class TestWSFE(TransactionCase):
 
