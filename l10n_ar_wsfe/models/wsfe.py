@@ -168,6 +168,7 @@ class wsfe_config(models.Model):
             msg = ''
             if result['Errores']:
                 msg = 'Errores: ' + '\n'.join(result['Errores']) + '\n'
+                msg = msg.encode('latin1').decode('utf8')
 
             if self._context.get('raise-exception', True):
                 raise osv.except_osv(_('AFIP Web Service Error'),
@@ -251,6 +252,7 @@ class wsfe_config(models.Model):
         if res['Reproceso'] == 'S':
             reprocess = True
 
+        errors = '\n'.join(res['Errores']).encode('latin1').decode('utf8')
         vals = {
             'voucher_type': voucher_type_name,
             'nregs': len(details),
@@ -258,7 +260,7 @@ class wsfe_config(models.Model):
             'date_request': time.strftime('%Y-%m-%d %H:%M:%S'),
             'result': res['Resultado'],
             'reprocess': reprocess,
-            'errors': '\n'.join(res['Errores']),
+            'errors': errors,
             'detail_ids': req_details,
         }
 

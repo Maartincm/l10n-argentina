@@ -27,8 +27,10 @@ from openerp.exceptions import except_orm
 from openerp.osv import osv
 
 from openerp.addons.connector.queue.job import job
-from openerp.addons.connector.session import ConnectorSession
+# from openerp.addons.connector.session import ConnectorSession
 
+import ast
+from lxml import etree
 import logging
 _logger = logging.getLogger(__name__)
 
@@ -36,56 +38,43 @@ __author__ = "Sebastian Kennedy <skennedy@e-mips.com.ar>"
 
 
 @job(default_channel='root.general')
-def validate_invoice(session, model_name, record_id):
+def validated_invoice_move(session, model_name, record_id):
     self = session.env[model_name].browse(record_id)
-    _logger.info(_('User `%s` Begun an Invoice Validation for the ID: %s')
-                 % (self.env.user.name, record_id))
-    self.action_date_assign()
-    self.action_move_create()
-    self.queue('send_to_afip')
+    _logger.info(_('Creating Move for Invoice `%s`') % self.internal_number)
+    try:
+        self.action_move_create()
+        self.signal_workflow('approved_invoice')
+    except Exception as e:
+        self.env.cr.rollback()
+        self.write({'state': 'error'})
+        self.env.cr.commit()
+        raise e
 
 
 @job(default_channel='root.invoice')
-def send_to_afip(session, model_name, record_id):
+def validate_invoice(session, model_name, record_id):
     self = session.env[model_name].browse(record_id)
-    self.action_number()
-    _logger.info(_('Sending Invoice `%s` To Afip') % self.internal_number)
-    self.action_aut_cae()
-    self.signal_workflow('approved_invoice')
-
-
-connector_methods = {
-    'validate_invoice': validate_invoice,
-    'send_to_afip': send_to_afip,
-}
+    try:
+        _logger.info(_('User `%s` Begun an Invoice Validation for the ID: %s')
+                     % (self.env.user.name, record_id))
+        self.action_date_assign()
+        if not self.date_invoice:
+            self.write({'date_invoice': fields.Date.context_today(self)})
+        self.button_reset_taxes()
+        self.action_number()
+        _logger.info(_('Sending Invoice `%s` To Afip') % self.internal_number)
+        self.action_aut_cae()
+        self.queue('validated_invoice_move', session=session)
+    except Exception as e:
+        self.env.cr.rollback()
+        self.signal_workflow('rejected_invoice')
+        self.env.cr.commit()
+        raise e
 
 
 class account_invoice(models.Model):
     _name = "account.invoice"
     _inherit = "account.invoice"
-
-###############################################################################
-
-    # This block should be merged with Odoo API
-
-    @api.model
-    def get_connector_session(self):
-        s = ConnectorSession(
-            self._cr, self.env.user.id, context=self.env.context)
-        return s
-
-    session = get_connector_session
-
-    @api.multi
-    def queue(self, job, **kwargs):
-        method = connector_methods.get(job, False)
-        if not method:
-            raise Exception(_("Method %s is not defined in file %s") %
-                            (job, __file__))
-        method.delay(self.session(), self._name, self.id, **kwargs)
-
-
-###############################################################################
 
     aut_cae = fields.Boolean('Autorizar', default=False,
                              help='Pedido de autorizacion a la AFIP')
@@ -118,6 +107,7 @@ class account_invoice(models.Model):
             ('proforma2', _('Pro-forma')),
             ('waiting', _('Waiting')),
             ('open', _('Open')),
+            ('error', _('Error')),
             ('rejected', _('Rejected')),
             ('paid', _('Paid')),
             ('cancel', _('Cancelled')),
@@ -128,6 +118,64 @@ class account_invoice(models.Model):
              " * The 'Open' status is used when user create invoice,a invoice number is generated.Its in open status till user does not pay invoice.\n"  # noqa
              " * The 'Paid' status is set automatically when the invoice is paid. Its related journal entries may or may not be reconciled.\n"  # noqa
              " * The 'Cancelled' status is used when user cancel invoice.")
+
+###############################################################################
+
+    def _setup_base(self, *args):
+        super(account_invoice, self)._setup_base(*args)
+        for name, f in self._fields.items():
+            if f.states and 'draft' in f.states:
+                f.states['rejected'] = f.states['draft']
+
+    def fields_view_get(self, cr, uid, view_id=None, view_type=None,
+                        context=None, toolbar=False, submenu=False):
+        res = super(account_invoice, self).fields_view_get(
+            cr, uid, view_id=view_id, view_type=view_type, context=context,
+            toolbar=toolbar, submenu=submenu)
+        if view_type != 'form':
+            return res
+        doc = etree.XML(res['arch'])
+        for node in doc.xpath('//field|//button|//group|//page'):
+            states = node.get('states')
+            attrs = node.get('attrs')
+            modifiers = node.get('modifiers')
+            if modifiers:
+                modifiers = modifiers.replace('true', 'True')
+                modifiers = modifiers.replace('false', 'False')
+            if states and 'draft' in states:
+                node.set('states', states + ',rejected')
+            if (attrs and 'draft' in attrs) or \
+                    (modifiers and 'draft' in modifiers):
+                mod_dict = ast.literal_eval(attrs or modifiers)
+                for attr, val in mod_dict.items():
+                    new_val = []
+                    if isinstance(val, (bool, str)):
+                        continue
+                    for i, triplet in enumerate(val):
+                        if triplet[0] == 'state' and 'draft' in triplet[2]:
+                            if isinstance(triplet[2], list):
+                                new_t = ('state', triplet[1],
+                                         triplet[2] + ['rejected'])
+                            else:
+                                new_t = ('state', triplet[1],
+                                         triplet[2] + ',rejected')
+                            if modifiers and not attrs:
+                                new_t = list(new_t)
+                            new_val.append(new_t)
+                        else:
+                            new_val.append(triplet)
+                    mod_dict[attr] = new_val
+                    mod_dict_str = str(mod_dict)
+                    if modifiers and not attrs:
+                        mod_dict_str = mod_dict_str.replace('True', 'true')
+                        mod_dict_str = mod_dict_str.replace('False', 'false')
+                        mod_dict_str = mod_dict_str.replace("'", "&quot;")
+                node.set((attrs and 'attrs') or 'modifiers', mod_dict_str)
+        res['arch'] = etree.tostring(doc)
+        res['arch'] = res['arch'].replace('&amp;', '&')  # ?
+        return res
+
+###############################################################################
 
     @api.multi
     def queue_invoice(self):
@@ -307,7 +355,7 @@ class account_invoice(models.Model):
 
         # TODO: not correct fix but required a fresh values before reading it.
         # Esto se usa para forzar a que recalcule los campos funcion
-        self.write({})
+        # self.write({})
 
         for obj_inv in self:
             local = obj_inv.local
@@ -323,8 +371,6 @@ class account_invoice(models.Model):
             # Chequeamos si es local por medio de la posicion fiscal
             local = True
             local = obj_inv.fiscal_position.local
-
-            reference = obj_inv.reference or ''
 
             # Si es local o de cliente
             if local or invtype in ('out_invoice', 'out_refund'):
@@ -407,7 +453,25 @@ class account_invoice(models.Model):
             # Escribimos los campos necesarios de la factura
             obj_inv.write(invoice_vals)
 
-            invoice_name = obj_inv.name_get()[0][1]
+            # invoice_name = obj_inv.name_get()[0][1]
+            # reference = obj_inv.reference or ''
+            # if not reference:
+            #     ref = invoice_name
+            # else:
+            #     ref = '%s [%s]' % (invoice_name, reference)
+
+            # Actulizamos el campo reference del move_id
+            # correspondiente a la creacion de la factura
+            # obj_inv._update_reference(ref)
+
+        return True
+
+    @api.multi
+    def action_move_create(self):
+        res = super(account_invoice, self).action_move_create()
+        for inv in self:
+            invoice_name = inv.name_get()[0][1]
+            reference = inv.reference or ''
             if not reference:
                 ref = invoice_name
             else:
@@ -415,9 +479,8 @@ class account_invoice(models.Model):
 
             # Actulizamos el campo reference del move_id
             # correspondiente a la creacion de la factura
-            obj_inv._update_reference(ref)
-
-        return True
+            inv._update_reference(ref)
+        return res
 
     @api.model
     def hook_add_taxes(self, inv, detalle):

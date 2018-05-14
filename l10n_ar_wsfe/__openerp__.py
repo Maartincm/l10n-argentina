@@ -29,6 +29,8 @@
         "base_vat_ar",
         "l10n_ar_point_of_sale",
         "l10n_ar_wsaa",
+        "connector",
+        "connector_jobs_api",
     ],
     "author": "E-MIPS",
     "website": "http://e-mips.com.ar",
