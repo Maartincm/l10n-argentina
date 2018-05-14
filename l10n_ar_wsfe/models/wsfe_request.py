@@ -57,6 +57,7 @@ class wsfe_request_detail(models.Model):
     cae_duedate = fields.Date('CAE Due Date', required=False, readonly=True)
     result = fields.Selection([('A', 'Approved'), ('R', 'Rejected')], 'Result', readonly=True)
     observations = fields.Text('Observations', readonly=True)
+    errors = fields.Text('Errors', related='request_id.errors')
 
     currency = fields.Char('Currency', required=False, readonly=True)
     currency_rate = fields.Float('Currency Rate', required=False, readonly=True)
@@ -80,5 +81,6 @@ class wsfex_request_detail(models.Model):
     event = fields.Char('Event', size=255, readonly=True)
     error = fields.Char('Error', size=255, readonly=True)
     detail = fields.Text('Detail', readonly=True)
+    # errors = fields.Text('Errors', related='request_id.errors')
 
 wsfex_request_detail()
