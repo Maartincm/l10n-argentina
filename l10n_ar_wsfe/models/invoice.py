@@ -38,15 +38,15 @@ __author__ = "Sebastian Kennedy <skennedy@e-mips.com.ar>"
 
 
 @job(default_channel='root.general')
-def validated_invoice_move(session, model_name, record_id):
+def register_electronic_invoice(session, model_name, record_id):
     self = session.env[model_name].browse(record_id)
-    _logger.info(_('Creating Move for Invoice `%s`') % self.internal_number)
+    _logger.info(_('Sending Invoice `%s` To Afip') % self.internal_number)
     try:
-        self.action_move_create()
+        self.action_aut_cae()
         self.signal_workflow('approved_invoice')
     except Exception as e:
         self.env.cr.rollback()
-        self.write({'state': 'error'})
+        self.signal_workflow('rejected_invoice')
         self.env.cr.commit()
         raise e
 
@@ -58,16 +58,17 @@ def validate_invoice(session, model_name, record_id):
         _logger.info(_('User `%s` Begun an Invoice Validation for the ID: %s')
                      % (self.env.user.name, record_id))
         self.action_date_assign()
-        if not self.date_invoice:
-            self.write({'date_invoice': fields.Date.context_today(self)})
-        self.button_reset_taxes()
+        self.action_move_create()
         self.action_number()
-        _logger.info(_('Sending Invoice `%s` To Afip') % self.internal_number)
-        self.action_aut_cae()
-        self.queue('validated_invoice_move', session=session)
+        # if not self.date_invoice:
+        #     self.write({'date_invoice': fields.Date.context_today(self)})
+        # self.button_reset_taxes()
+        self.queue('register_electronic_invoice', session=session)
     except Exception as e:
         self.env.cr.rollback()
-        self.signal_workflow('rejected_invoice')
+        if self.move_id:
+            self.move_id.unlink()
+        self.signal_workflow('error_invoice')
         self.env.cr.commit()
         raise e
 

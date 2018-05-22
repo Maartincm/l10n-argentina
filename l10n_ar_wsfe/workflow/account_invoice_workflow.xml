@@ -65,6 +65,12 @@
             <field name="signal">approved_invoice</field>
         </record>
 
+        <record id="trans_pre_to_draft" model="workflow.transition">
+            <field name="act_from" ref="act_pre_open"/>
+            <field name="act_to" ref="account.act_draft"/>
+            <field name="signal">error_invoice</field>
+        </record>
+
         <record id="trans_pre_to_rejected" model="workflow.transition">
             <field name="act_from" ref="act_pre_open"/>
             <field name="act_to" ref="act_rejected"/>
