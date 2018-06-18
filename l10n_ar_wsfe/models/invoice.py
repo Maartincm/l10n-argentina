@@ -23,7 +23,7 @@
 import re
 
 from openerp import _, api, exceptions, fields, models, pooler
-from openerp.exceptions import except_orm
+from openerp.exceptions import except_orm, MissingError
 from openerp.osv import osv
 
 from openerp.addons.connector.queue.job import job
@@ -67,8 +67,15 @@ def validate_invoice(session, model_name, record_id):
     except Exception as e:
         self.env.cr.rollback()
         if self.move_id:
-            self.move_id.unlink()
+            try:
+                self.move_id.unlink()
+            except MissingError:
+                pass
         self.signal_workflow('error_invoice')
+        self.write({
+            'state': 'draft',
+            'internal_number': False
+        })
         self.env.cr.commit()
         raise e
 
@@ -278,22 +285,38 @@ class account_invoice(models.Model):
         return True
 
     @api.multi
-    def _get_next_wsfe_number(self, conf):
-        self.ensure_one()
-        inv = self
+    def _get_voucher_type(self):
         voucher_type_obj = self.env['wsfe.voucher_type']
 
         # Obtenemos el tipo de comprobante
-        tipo_cbte = voucher_type_obj.get_voucher_type(inv)
+        voucher_type = voucher_type_obj.get_voucher_type(self)
+        return voucher_type
+
+    @api.multi
+    def _get_next_wsfe_number(self, conf):
+        self.ensure_one()
+        inv = self
+        tipo_cbte = self._get_voucher_type()
         try:
             pto_vta = int(inv.pos_ar_id.name)
         except ValueError:
             err = _('El nombre del punto de venta tiene que ser numerico')
             raise except_orm(_('Error'), err)
 
-        res = conf.get_last_voucher(pto_vta, tipo_cbte)
+        ws = self.ws_auth()
+        data = {
+            'FECompUltimoAutorizado': {
+                'CbteTipo': tipo_cbte,
+                'PtoVta': pto_vta,
+            }
+        }
+        # TODO Make Checks
+        ws.add(data, no_check='all')
+        response = ws.request('FECompUltimoAutorizado')
+        res = ws.parse_response(response)
+        last = res['response'].CbteNro
 
-        return res + 1
+        return last + 1
 
     @api.multi
     def get_next_invoice_number(self):
@@ -347,8 +370,6 @@ class account_invoice(models.Model):
 
     @api.multi
     def action_number(self):
-        wsfe_conf_obj = self.env['wsfe.config']
-        wsfex_conf_obj = self.env['wsfex.config']
 
         next_number = None
         invoice_vals = {}
@@ -359,18 +380,9 @@ class account_invoice(models.Model):
         # self.write({})
 
         for obj_inv in self:
-            local = obj_inv.local
-            ctx = self.env.context.copy()
-            if local:
-                ctx['without_raise'] = True
-            wsfe_conf = wsfe_conf_obj.with_context(ctx).get_config()
-            if not local:
-                ctx = {}
-            wsfex_conf = wsfex_conf_obj.with_context(ctx).get_config()
-            invtype = obj_inv.type
 
+            invtype = obj_inv.type
             # Chequeamos si es local por medio de la posicion fiscal
-            local = True
             local = obj_inv.fiscal_position.local
 
             # Si es local o de cliente
@@ -390,19 +402,8 @@ class account_invoice(models.Model):
                 pos_ar = obj_inv.pos_ar_id
                 next_number = self.get_next_invoice_number()
 
-                # Chequeamos si corresponde Factura Electronica
-                # Aca nos fijamos si el pos_ar_id tiene
-                # factura electronica asignada
-                confs = filter(lambda c: pos_ar in c.point_of_sale_ids,
-                               [wsfe_conf, wsfex_conf])
-
-                if len(confs) > 1:
-                    err = _("There is more than one configuration " +
-                            "with this POS %s") % pos_ar.name
-                    raise osv.except_osv(_("WSFE Error"), err)
-
-                if confs:
-                    conf = confs[0]
+                conf = self.get_ws_conf()
+                if conf:
                     invoice_vals['aut_cae'] = True
                     fe_next_number = obj_inv._get_next_wsfe_number(conf)
 
@@ -509,62 +510,21 @@ class account_invoice(models.Model):
 
     @api.multi
     def action_aut_cae(self):
-        voucher_type_obj = self.env['wsfe.voucher_type']
-
-        wsfe_conf_obj = self.env['wsfe.config']
-
-        wsfex_conf_obj = self.env['wsfex.config']
 
         for inv in self:
             if not inv.aut_cae:
                 return True
 
-            local = inv.local
-            ctx = self.env.context.copy()
-            if local:
-                ctx['without_raise'] = True
-            wsfe_conf = wsfe_conf_obj.with_context(ctx).get_config()
-            if not local:
-                ctx = {}
-            wsfex_conf = wsfex_conf_obj.with_context(ctx).get_config()
-            self._sanitize_taxes(inv)
-            pos_ar = inv.pos_ar_id
-            # Chequeamos si corresponde Factura Electronica
-            # Aca nos fijamos si el pos_ar_id tiene
-            # factura electronica asignada
-            confs = filter(lambda c: pos_ar in c.point_of_sale_ids,
-                           [wsfe_conf, wsfex_conf])
-
-            if len(confs) > 1:
-                err = _("There is more than one configuration " +
-                        "with this POS %s") % pos_ar.name
-                raise osv.except_osv(_("WSFE Error"), err)
-
-            if confs:
-                conf = confs[0]
-            else:
-                err = _("There is no configuration for this " +
-                        "POS %s") % pos_ar.name
-                raise osv.except_osv(_("WSFE Error"), err)
-
+            self._sanitize_taxes(self)
             # Obtenemos el tipo de comprobante
-            tipo_cbte = voucher_type_obj.get_voucher_type(inv)
-
-            # Obtenemos el numero de comprobante a enviar a la AFIP teniendo en
-            # cuenta que inv.number == 000X-00000NN o algo similar.
-            # TODO: Esto esta duplicado en los metodos de wsfe y wsfex
-            inv_number = inv.internal_number
-            pos, cbte_nro = inv_number.split('-')
-            pos = int(pos)
-            cbte_nro = int(cbte_nro)
-
-            # Derivamos a la configuracion correspondiente
-            fe_det_req = conf.prepare_details([inv])
-            result = conf.get_invoice_CAE(pos, tipo_cbte, fe_det_req)
+            # voucher_type_obj = self.env['wsfe.voucher_type']
+            # tipo_cbte = voucher_type_obj.get_voucher_type(inv)
+            ws = self.ws_auth()
 
             new_cr = False
             try:
-                invoices_approved = conf._parse_result([inv], result)
+                invoices_approved = ws.send_invoice(inv)
+                # invoices_approved = conf._parse_result([inv], result)
 
                 for invoice_id, invoice_vals in invoices_approved.iteritems():
                     inv_obj = self.env['account.invoice'].browse(invoice_id)
@@ -584,72 +544,15 @@ class account_invoice(models.Model):
                 else:
                     cr2 = self.env.cr
 
-                new_env = conf.env(cr=cr2)
-                conf.with_env(new_env)._log_wsfe_request(
-                    pos, tipo_cbte, fe_det_req, result)
+                new_env = self.env(cr=cr2)
+                # TODO Create WSFE Requests from WS Object maybe
+                # conf.with_env(new_env)._log_wsfe_request(
+                #     pos, tipo_cbte, fe_det_req, result)
+                ws.log_request(new_env)
                 if new_cr:
                     cr2.commit()
                     cr2.close()
         return True
-
-    @api.multi
-    def _parse_result(self, result):
-        invoices_approved = {}
-
-        # Verificamos el resultado de la Operacion
-        # Si no fue aprobado
-        if result['Resultado'] == 'R':
-            msg = ''
-            if result['Errores']:
-                msg = 'Errores: ' + '\n'.join(result['Errores']) + '\n'
-
-            if self._context.get('raise-exception', True):
-                err = _('La factura no fue aprobada. \n%s') % msg
-                raise except_orm(_('AFIP Web Service Error'), err)
-
-        elif result['Resultado'] == 'A' or result['Resultado'] == 'P':
-            index = 0
-            for inv in self:
-                invoice_vals = {}
-                comp = result['Comprobantes'][index]
-                if comp['Observaciones']:
-                    msg = 'Observaciones: ' + '\n'.join(comp['Observaciones'])
-
-                # Si es un contacto, tomamos el partner que
-                # es el que tiene la informacion contable
-                partner_id = inv.partner_id.parent_id and \
-                    inv.partner_id.parent_id or inv.partner_id
-
-                # Chequeamos que se corresponda con
-                # la factura que enviamos a validar
-                doc_type = partner_id.document_type_id and \
-                    partner_id.document_type_id.afip_code or '99'
-                doc_tipo = comp['DocTipo'] == int(doc_type)
-                doc_num = comp['DocNro'] == int(partner_id.vat)
-                cbte = True
-                if inv.internal_number:
-                    cbte = comp['CbteHasta'] == int(inv.internal_number.
-                                                    split('-')[1])
-                else:
-                    # TODO: El nro de factura deberia unificarse
-                    # para que se setee en una funcion
-                    # o algo asi para que no haya posibilidad de que
-                    # sea diferente nunca en su formato
-                    invoice_vals['internal_number'] = '%04d-%08d' % \
-                        (result['PtoVta'], comp['CbteHasta'])
-
-                if not all([doc_tipo, doc_num, cbte]):
-                    err = _("Validated invoice that not corresponds!")
-                    raise except_orm(_("WSFE Error!"), err)
-
-                if comp['Resultado'] == 'A':
-                    invoice_vals['cae'] = comp['CAE']
-                    invoice_vals['cae_due_date'] = comp['CAEFchVto']
-                    invoices_approved[inv.id] = invoice_vals
-
-                index += 1
-
-        return invoices_approved
 
     @api.one
     def wsfe_relate_invoice(self, pos, number, date_invoice,
@@ -681,6 +584,119 @@ class account_invoice(models.Model):
         # Llamamos al workflow para que siga su curso
         self.signal_workflow('invoice_massive_open')
         return
+
+###############################################################################
+
+    @api.multi
+    def ws_auth(self):
+        # TODO WSAA To easywsy and this could float between WSAA & WSFE
+        conf = self.get_ws_conf()
+        token, sign = conf.wsaa_ticket_id.get_token_sign()
+        auth = {
+            'Token': token,
+            'Sign': sign,
+            'Cuit': conf.cuit
+        }
+        ws = conf._webservice_class(conf.url)
+        ws.login('Auth', auth)
+        return ws
+
+    @api.multi
+    def check_invoice_total(self, calculated_total):
+        # Chequeamos que el Total calculado por Odoo, se corresponda
+        # con el total calculado por nosotros, tal vez puede haber un error
+        # de redondeo
+        obj_precision = self.env['decimal.precision']
+        prec = obj_precision.precision_get('Account')
+        if round(calculated_total, prec) != round(self.amount_total, prec):
+            raise osv.except_osv(
+                _('Error in amount_total!'),
+                _("The total amount of the invoice does not " +
+                  "match the total calculated.\n" +
+                  "Maybe there is a rounding error!. " +
+                  "(Amount Calculated: %f)") % (calculated_total))
+
+    @api.multi
+    def get_ws_conf(self):
+        self.ensure_one()
+        wsfe_conf_obj = self.env['wsfe.config']
+        wsfex_conf_obj = self.env['wsfex.config']
+        local = self.local
+        ctx = self.env.context.copy()
+        if local:
+            ctx['without_raise'] = True
+        wsfe_conf = wsfe_conf_obj.with_context(ctx).get_config()
+        if not local:
+            ctx = {}
+        wsfex_conf = wsfex_conf_obj.with_context(ctx).get_config()
+        pos_ar = self.pos_ar_id
+        # Chequeamos si corresponde Factura Electronica
+        # Aca nos fijamos si el pos_ar_id tiene
+        # factura electronica asignada
+        confs = filter(lambda c: pos_ar in c.point_of_sale_ids,
+                       [wsfe_conf, wsfex_conf])
+
+        if len(confs) > 1:
+            err = _("There is more than one configuration " +
+                    "with this POS %s") % pos_ar.name
+            raise osv.except_osv(_("WSFE Error"), err)
+
+        if confs:
+            conf = confs[0]
+        else:
+            err = _("There is no configuration for this " +
+                    "POS %s") % pos_ar.name
+            raise osv.except_osv(_("WSFE Error"), err)
+        return conf
+
+    @api.multi
+    def split_number(self):
+        try:
+            pos, numb = self.internal_number.split('-')
+        except ValueError:
+            raise except_orm(
+                _("Error!"),
+                _("Wrong Number format for invoice id: `%s`" % self.id))
+        if not pos:
+            raise except_orm(
+                _("Error!"),
+                _("Wrong POS for invoice id: `%s`" % self.id))
+        if not numb:
+            raise except_orm(
+                _("Error!"),
+                _("Wrong Number Sequence for invoice id: `%s`" % self.id))
+        try:
+            pos = int(pos)
+        except ValueError:
+            raise except_orm(
+                _("Error!"),
+                _("Wrong POS `%s` for invoice id: `%s`" % (pos, self.id)))
+        try:
+            numb = int(numb)
+        except ValueError:
+            raise except_orm(
+                _("Error!"),
+                _("Wrong Number Sequence `%s` for invoice id: `%s`" %
+                  (numb, self.id)))
+        return pos, numb
+
+    @api.multi
+    def get_currency_code(self):
+        # Obtenemos la moneda de la factura
+        # Lo hacemos por el wsfex_config, por cualquiera de ellos
+        # si es que hay mas de uno
+        self.ensure_one()
+        currency_code_obj = self.env['wsfex.currency.codes']
+        currency_code_ids = currency_code_obj.search(
+            [('currency_id', '=', self.currency_id.id)])
+
+        if not currency_code_ids:
+            raise except_orm(
+                _("WSFE Error!"),
+                _("Currency has to be configured correctly " +
+                  "in WSFEX Configuration."))
+        currency_code = currency_code_ids[0].code
+        return currency_code
 
 
 class account_invoice_tax(models.Model):
