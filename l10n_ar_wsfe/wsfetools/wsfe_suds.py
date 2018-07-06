@@ -1,4 +1,5 @@
 from suds.client import Client
+from easywsy import WebService, wsapi
 import urllib2
 
 import logging
@@ -371,7 +372,8 @@ class WSFEv1:
                         #argdetreq[k] = None
 
             if len(arrayIva):
-                argdetreq.Iva.AlicIva.append(arrayIva)
+                # argdetreq.Iva.AlicIva.append(arrayIva)
+                argdetreq.Iva.AlicIva += arrayIva
             if len(arrayTributos):
                 argdetreq.Tributos.Tributo.append(arrayTributos)
             argcaereq.FeDetReq.FECAEDetRequest.append(argdetreq)
@@ -420,3 +422,39 @@ class WSFEv1:
 #    #wsfe.fe_dummy()
 #    wsfe.fe_aut_request([])
 #    #wsfe.fe_recuperar_qty()
+
+
+class WSFEv2(WebService):
+
+    def parse_data(self, pos, voucher_type, details):
+        qty = len(details)
+        for inv in details:
+            data = {
+                'FECAESolicitar': {
+                    'FeCAEReq': {
+                        'FeCabReq': {
+                            'CbteTipo': voucher_type,
+                            'PtoVta': pos,
+                            'CantReg': qty,
+                        },
+                        'FeDetReq': {
+                            'FECAEDetRequest': [],
+                        },
+                    },
+                },
+            }
+            det_array = data['FECAESolicitar']['FeCAEReq'][
+                'FeDetReq']['FECAEDetRequest']
+            inv.update({
+                'FchServDesde': '',
+                'FchServHasta': '',
+                'FchVtoPago': '',
+            })
+            inv['Iva'] = {
+                'AlicIva': inv['Iva'],
+            }
+            inv['Tributos'] = {
+                'Tributo': inv['Tributos'],
+            }
+            det_array.append(inv)
+            self.add(data, no_check='all')

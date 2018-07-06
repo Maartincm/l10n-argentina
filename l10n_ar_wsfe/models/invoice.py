@@ -22,62 +22,13 @@
 
 import re
 
-from openerp import _, api, exceptions, fields, models, pooler
-from openerp.exceptions import except_orm, MissingError
-from openerp.osv import osv
+from openerp import _, api, exceptions, fields, models
+from openerp.exceptions import except_orm
 
-from openerp.addons.connector.queue.job import job
-# from openerp.addons.connector.session import ConnectorSession
-
-import ast
-from lxml import etree
 import logging
 _logger = logging.getLogger(__name__)
 
 __author__ = "Sebastian Kennedy <skennedy@e-mips.com.ar>"
-
-
-@job(default_channel='root.general')
-def register_electronic_invoice(session, model_name, record_id):
-    self = session.env[model_name].browse(record_id)
-    _logger.info(_('Sending Invoice `%s` To Afip') % self.internal_number)
-    try:
-        self.action_aut_cae()
-        self.signal_workflow('approved_invoice')
-    except Exception as e:
-        self.env.cr.rollback()
-        self.signal_workflow('rejected_invoice')
-        self.env.cr.commit()
-        raise e
-
-
-@job(default_channel='root.invoice')
-def validate_invoice(session, model_name, record_id):
-    self = session.env[model_name].browse(record_id)
-    try:
-        _logger.info(_('User `%s` Begun an Invoice Validation for the ID: %s')
-                     % (self.env.user.name, record_id))
-        self.action_date_assign()
-        self.action_move_create()
-        self.action_number()
-        # if not self.date_invoice:
-        #     self.write({'date_invoice': fields.Date.context_today(self)})
-        # self.button_reset_taxes()
-        self.queue('register_electronic_invoice', session=session)
-    except Exception as e:
-        self.env.cr.rollback()
-        if self.move_id:
-            try:
-                self.move_id.unlink()
-            except MissingError:
-                pass
-        self.signal_workflow('error_invoice')
-        self.write({
-            'state': 'draft',
-            'internal_number': False
-        })
-        self.env.cr.commit()
-        raise e
 
 
 class account_invoice(models.Model):
@@ -108,88 +59,6 @@ class account_invoice(models.Model):
         help="International Commercial Terms are a series of predefined commercial terms used in international transactions.")  # noqa
     wsfe_request_ids = fields.One2many('wsfe.request.detail', 'name')
     wsfex_request_ids = fields.One2many('wsfex.request.detail', 'invoice_id')
-
-    state = fields.Selection([
-            ('draft', _('Draft')),
-            ('proforma', _('Pro-forma')),
-            ('proforma2', _('Pro-forma')),
-            ('waiting', _('Waiting')),
-            ('open', _('Open')),
-            ('error', _('Error')),
-            ('rejected', _('Rejected')),
-            ('paid', _('Paid')),
-            ('cancel', _('Cancelled')),
-        ], string='Status', index=True, readonly=True, default='draft',
-        track_visibility='onchange', copy=False,
-        help=" * The 'Draft' status is used when a user is encoding a new and unconfirmed Invoice.\n"  # noqa
-             " * The 'Pro-forma' when invoice is in Pro-forma status,invoice does not have an invoice number.\n"  # noqa
-             " * The 'Open' status is used when user create invoice,a invoice number is generated.Its in open status till user does not pay invoice.\n"  # noqa
-             " * The 'Paid' status is set automatically when the invoice is paid. Its related journal entries may or may not be reconciled.\n"  # noqa
-             " * The 'Cancelled' status is used when user cancel invoice.")
-
-###############################################################################
-
-    def _setup_base(self, *args):
-        super(account_invoice, self)._setup_base(*args)
-        for name, f in self._fields.items():
-            if f.states and 'draft' in f.states:
-                f.states['rejected'] = f.states['draft']
-
-    def fields_view_get(self, cr, uid, view_id=None, view_type=None,
-                        context=None, toolbar=False, submenu=False):
-        res = super(account_invoice, self).fields_view_get(
-            cr, uid, view_id=view_id, view_type=view_type, context=context,
-            toolbar=toolbar, submenu=submenu)
-        if view_type != 'form':
-            return res
-        doc = etree.XML(res['arch'])
-        for node in doc.xpath('//field|//button|//group|//page'):
-            states = node.get('states')
-            attrs = node.get('attrs')
-            modifiers = node.get('modifiers')
-            if modifiers:
-                modifiers = modifiers.replace('true', 'True')
-                modifiers = modifiers.replace('false', 'False')
-            if states and 'draft' in states:
-                node.set('states', states + ',rejected')
-            if (attrs and 'draft' in attrs) or \
-                    (modifiers and 'draft' in modifiers):
-                mod_dict = ast.literal_eval(attrs or modifiers)
-                for attr, val in mod_dict.items():
-                    new_val = []
-                    if isinstance(val, (bool, str)):
-                        continue
-                    for i, triplet in enumerate(val):
-                        if triplet[0] == 'state' and 'draft' in triplet[2]:
-                            if isinstance(triplet[2], list):
-                                new_t = ('state', triplet[1],
-                                         triplet[2] + ['rejected'])
-                            else:
-                                new_t = ('state', triplet[1],
-                                         triplet[2] + ',rejected')
-                            if modifiers and not attrs:
-                                new_t = list(new_t)
-                            new_val.append(new_t)
-                        else:
-                            new_val.append(triplet)
-                    mod_dict[attr] = new_val
-                    mod_dict_str = str(mod_dict)
-                    if modifiers and not attrs:
-                        mod_dict_str = mod_dict_str.replace('True', 'true')
-                        mod_dict_str = mod_dict_str.replace('False', 'false')
-                        mod_dict_str = mod_dict_str.replace("'", "&quot;")
-                node.set((attrs and 'attrs') or 'modifiers', mod_dict_str)
-        res['arch'] = etree.tostring(doc)
-        res['arch'] = res['arch'].replace('&amp;', '&')  # ?
-        return res
-
-###############################################################################
-
-    @api.multi
-    def queue_invoice(self):
-        self.ensure_one()
-        self.write({'state': 'waiting'})
-        self.queue('validate_invoice')
 
     @api.multi
     def onchange_partner_id(self, type, partner_id, date_invoice=False,
@@ -252,12 +121,13 @@ class account_invoice(models.Model):
                 raise except_orm(_('Error!'),
                                  _('Denomination not set in invoice'))
 
-            if inv.pos_ar_id.denomination_id.id != denomination_id:
-                err = _('Point of sale has not the same ' +
-                        'denomination as the invoice.')
-                raise except_orm(_('Error!'), err)
+            # if inv.pos_ar_id.denomination_id.id != denomination_id:
+            #     err = _('Point of sale has not the same ' +
+            #             'denomination as the invoice.')
+            #     raise except_orm(_('Error!'), err)
 
             # Chequeamos que la posicion fiscal y la denomination_id coincidan
+
             if inv.fiscal_position.denomination_id.id != denomination_id:
                 err = _('The invoice denomination does ' +
                         'not corresponds with this fiscal position.')
@@ -286,6 +156,7 @@ class account_invoice(models.Model):
 
     @api.multi
     def _get_voucher_type(self):
+        self.ensure_one()
         voucher_type_obj = self.env['wsfe.voucher_type']
 
         # Obtenemos el tipo de comprobante
@@ -293,7 +164,20 @@ class account_invoice(models.Model):
         return voucher_type
 
     @api.multi
-    def _get_next_wsfe_number(self, conf):
+    def _get_pos(self):
+        self.ensure_one()
+        try:
+            pos = self.split_number()[0]
+        except Exception:
+            if not self.pos_ar_id:
+                err = _("Pos not found for invoice `%s` (id: %s)") % \
+                    (self.internal_number, self.id)
+                raise except_orm(_("Error!"), err)
+            pos = int(self.pos_ar_id.name)
+        return pos
+
+    @api.multi
+    def _get_next_wsfe_number(self):
         self.ensure_one()
         inv = self
         tipo_cbte = self._get_voucher_type()
@@ -314,6 +198,7 @@ class account_invoice(models.Model):
         ws.add(data, no_check='all')
         response = ws.request('FECompUltimoAutorizado')
         res = ws.parse_response(response)
+        del(ws)
         last = res['response'].CbteNro
 
         return last + 1
@@ -405,7 +290,7 @@ class account_invoice(models.Model):
                 conf = self.get_ws_conf()
                 if conf:
                     invoice_vals['aut_cae'] = True
-                    fe_next_number = obj_inv._get_next_wsfe_number(conf)
+                    fe_next_number = obj_inv._get_next_wsfe_number()
 
                     # Si es homologacion, no hacemos el chequeo del numero
                     if not conf.homologation:
@@ -516,22 +401,18 @@ class account_invoice(models.Model):
                 return True
 
             self._sanitize_taxes(self)
-            # Obtenemos el tipo de comprobante
-            # voucher_type_obj = self.env['wsfe.voucher_type']
-            # tipo_cbte = voucher_type_obj.get_voucher_type(inv)
             ws = self.ws_auth()
 
-            new_cr = False
             try:
                 invoices_approved = ws.send_invoice(inv)
-                # invoices_approved = conf._parse_result([inv], result)
 
                 for invoice_id, invoice_vals in invoices_approved.iteritems():
                     inv_obj = self.env['account.invoice'].browse(invoice_id)
                     inv_obj.write(invoice_vals)
+                # Commit the info that was written to the invoice and
+                # given by AFIP to prevent desynchronizations
+                self.env.cr.commit()
             except Exception as e:
-                new_cr = self.env.cr.dbname
-                self.env.cr.rollback()
                 raise e
             finally:
                 # Creamos el wsfe.request con otro cursor,
@@ -539,19 +420,13 @@ class account_invoice(models.Model):
                 # tengamos una excepcion e igualmente,
                 # tenemos que escribir la request
                 # Sino al hacer el rollback se pierde hasta el wsfe.request
-                if new_cr:
-                    cr2 = pooler.get_db(new_cr).cursor()
-                else:
-                    cr2 = self.env.cr
-
-                new_env = self.env(cr=cr2)
-                # TODO Create WSFE Requests from WS Object maybe
-                # conf.with_env(new_env)._log_wsfe_request(
-                #     pos, tipo_cbte, fe_det_req, result)
-                ws.log_request(new_env)
-                if new_cr:
-                    cr2.commit()
-                    cr2.close()
+                with api.Environment.manage():
+                    new_cr = self.pool.cursor()
+                    new_env = api.Environment(new_cr, self.env.user.id,
+                                              self.env.context)
+                    ws.log_request(new_env)
+                    new_cr.commit()
+                    new_cr.close()
         return True
 
     @api.one
@@ -602,6 +477,14 @@ class account_invoice(models.Model):
         return ws
 
     @api.multi
+    def complete_date_invoice(self):
+        for inv in self:
+            if not inv.date_invoice:
+                inv.write({
+                    'date_invoice': fields.Date.context_today(self),
+                })
+
+    @api.multi
     def check_invoice_total(self, calculated_total):
         # Chequeamos que el Total calculado por Odoo, se corresponda
         # con el total calculado por nosotros, tal vez puede haber un error
@@ -609,7 +492,7 @@ class account_invoice(models.Model):
         obj_precision = self.env['decimal.precision']
         prec = obj_precision.precision_get('Account')
         if round(calculated_total, prec) != round(self.amount_total, prec):
-            raise osv.except_osv(
+            raise except_orm(
                 _('Error in amount_total!'),
                 _("The total amount of the invoice does not " +
                   "match the total calculated.\n" +
@@ -618,10 +501,14 @@ class account_invoice(models.Model):
 
     @api.multi
     def get_ws_conf(self):
-        self.ensure_one()
         wsfe_conf_obj = self.env['wsfe.config']
         wsfex_conf_obj = self.env['wsfex.config']
-        local = self.local
+        local_list = self.mapped('local')
+        if len(list(set(local_list))) != 1:
+            err = _("Trying to get the WSFE config for invoices mixed " +
+                    "between local and not local")
+            raise except_orm(_("WSFE Error"), err)
+        local = local_list[0]
         ctx = self.env.context.copy()
         if local:
             ctx['without_raise'] = True
@@ -629,7 +516,12 @@ class account_invoice(models.Model):
         if not local:
             ctx = {}
         wsfex_conf = wsfex_conf_obj.with_context(ctx).get_config()
-        pos_ar = self.pos_ar_id
+        pos_ar_list = self.mapped('pos_ar_id')
+        if len(list(set(local_list))) != 1:
+            err = _("Trying to get the WSFE config for invoices that " +
+                    "belong to different points of sale")
+            raise except_orm(_("WSFE Error"), err)
+        pos_ar = pos_ar_list[0]
         # Chequeamos si corresponde Factura Electronica
         # Aca nos fijamos si el pos_ar_id tiene
         # factura electronica asignada
@@ -639,21 +531,21 @@ class account_invoice(models.Model):
         if len(confs) > 1:
             err = _("There is more than one configuration " +
                     "with this POS %s") % pos_ar.name
-            raise osv.except_osv(_("WSFE Error"), err)
+            raise except_orm(_("WSFE Error"), err)
 
         if confs:
             conf = confs[0]
         else:
             err = _("There is no configuration for this " +
                     "POS %s") % pos_ar.name
-            raise osv.except_osv(_("WSFE Error"), err)
+            raise except_orm(_("WSFE Error"), err)
         return conf
 
     @api.multi
     def split_number(self):
         try:
             pos, numb = self.internal_number.split('-')
-        except ValueError:
+        except (ValueError, AttributeError):
             raise except_orm(
                 _("Error!"),
                 _("Wrong Number format for invoice id: `%s`" % self.id))

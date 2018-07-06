@@ -1,11 +1,15 @@
 from easywsy import WebService, wsapi
 from datetime import datetime
 from openerp.exceptions import except_orm
-from openerp import _
+from openerp import _, fields
 
 import time
 import logging
 _logger = logging.getLogger(__name__)
+
+
+DATE_FORMAT = '%Y-%m-%d'
+AFIP_DATE_FORMAT = '%Y%m%d'
 
 
 class Error:
@@ -30,10 +34,10 @@ class Event:
 
 class WSFE2(WebService):
 
-    def parse_invoices(self, invoices):
+    def parse_invoices(self, invoices, first_number=False):
         reg_qty = len(invoices)
         voucher_type = invoices[0]._get_voucher_type()
-        pos = invoices[0].split_number()[0]
+        pos = invoices[0]._get_pos()
         data = {
             'FECAESolicitar': {
                 'FeCAEReq': {
@@ -50,14 +54,18 @@ class WSFE2(WebService):
         }
         details_array = data['FECAESolicitar']['FeCAEReq'][
             'FeDetReq']['FECAEDetRequest']
-        for inv in invoices:
-            inv_data = self.parse_invoice(inv)
+        nn = False
+        for inv_index, inv in enumerate(invoices):
+            if first_number:
+                nn = first_number + inv_index
+            inv_data = self.parse_invoice(inv, number=nn)
             details_array.append(inv_data)
         return data
 
-    def parse_invoice(self, invoice):
+    def parse_invoice(self, invoice, number=False):
         invoice.ensure_one()
-        number = invoice.split_number()[1]
+        if not number:
+            number = invoice.split_number()[1]
 
         date_invoice = datetime.strptime(invoice.date_invoice, '%Y-%m-%d')
         formatted_date_invoice = date_invoice.strftime('%Y%m%d')
@@ -126,7 +134,7 @@ class WSFE2(WebService):
         self.data.sent_invoices[invoice] = detail
         return detail
 
-    def get_iva_array(self, invoice):
+    def get_iva_array(self, invoice, retry=False):
         invoice.ensure_one()
         conf = invoice.get_ws_conf()
         iva_array = []
@@ -162,7 +170,13 @@ class WSFE2(WebService):
         importe_total = importe_neto + importe_neto_no_gravado + \
             importe_operaciones_exentas + importe_iva + importe_tributos
 
-        invoice.check_invoice_total(importe_total)
+        try:
+            invoice.check_invoice_total(importe_total)
+        except except_orm:
+            if retry:
+                raise
+            invoice.button_reset_taxes()
+            return self.get_iva_array(invoice, retry=True)
 
         vals = {
             'number': invoice.internal_number,
@@ -242,7 +256,7 @@ class WSFE2(WebService):
             comp['invoice'] = invoice
             comprobantes.append(comp)
 
-        pos = invoice.split_number()[0]
+        pos = invoice._get_pos()
         res = {
             'Comprobantes': comprobantes,
             'Errores': errores,
@@ -307,6 +321,8 @@ class WSFE2(WebService):
 
     def log_request(self, environment):
         env = environment
+        if not hasattr(self, 'last_request'):
+            return False
         res = self.last_request['parse_result']
         wsfe_req_obj = env['wsfe.request']
         voucher_type_obj = env['wsfe.voucher_type']
@@ -369,12 +385,18 @@ class WSFE2(WebService):
 
         return wsfe_req_obj.create(vals)
 
-    def send_invoice(self, invoice):
-        data = self.parse_invoices(invoice)
+    def send_invoice(self, invoice, first_number=False):
+        """
+        A mask for send_invoices
+        """
+        return self.send_invoices(invoice, first_number=first_number)
+
+    def send_invoices(self, invoices, first_number=False):
+        invoices.complete_date_invoice()
+        data = self.parse_invoices(invoices, first_number=first_number)
         from pprint import pprint as pp
         pp(data)
-        # TODO Remove No Check (And do proper checks)
-        self.add(data, no_check='all')
+        self.add(data)
         pp(self.data)
         response = self.request('FECAESolicitar')
         pp(response)
@@ -440,25 +462,90 @@ class WSFE2(WebService):
         return res
 
 ###############################################################################
+# AFIP Data Validation Methods According to:
+# http://www.afip.gov.ar/fe/documentos/manual_desarrollador_COMPG_v2.pdf
 
-    def get_last_voucher(self, pos, voucher_type):
-        token, sign = conf.wsaa_ticket_id.get_token_sign()
+    NATURALS = ['CantReg', 'CbteTipo', 'PtoVta', 'DocTipo', 'DocNro',
+                'CbteDesde', 'CbteHasta', 'Id']
 
-        _wsfe = wsfe(conf.cuit, token, sign, conf.url)
-        res = _wsfe.fe_comp_ultimo_autorizado(pos, voucher_type)
+    POSITIVE_REALS = ['ImpTotal', 'ImpTotConc', 'ImpNeto', 'ImpOpEx', 'ImpIVA',
+                      'ImpTrib', 'BaseImp', 'Importe']
 
-        self.check_errors(res)
-        self.check_observations(res)
-        last = res['response']
-        return last
-
-###############################################################################
-# Validation Methods
-    NATURALS = ['CantReg', 'CbteTipo', 'PtoVta']
+    STRINGS = ['MonId']
 
     @wsapi.check(NATURALS)
-    def natural_number(val):
+    def validate_natural_number(val):
         val = int(val)
         if val > 0:
             return True
+        return False
+
+    @wsapi.check(POSITIVE_REALS)
+    def validate_positive_reals(val):
+        if not val or (isinstance(val, float) and val > 0):
+            return True
+        return False
+
+    @wsapi.check(STRINGS)
+    def validate_strings(val):
+        if isinstance(val, (str, unicode)):
+            return True
+        return False
+
+    @wsapi.check(['Concepto'])
+    def validate_concept(val):
+        if val in [1, 2, 3]:
+            return True
+        return False
+
+    @wsapi.check(['FchServDesde'])
+    def validate_service_from_date(val, Concepto):
+        if Concepto not in [2, 3]:
+            return True
+        datetime.strptime(val, AFIP_DATE_FORMAT)
+        return True
+
+    @wsapi.check(['FchServHasta'])
+    def validate_service_to_date(val, FchServDesde, Concepto):
+        if Concepto not in [2, 3]:
+            return True
+        datetime.strptime(val, AFIP_DATE_FORMAT)
+        if val >= FchServDesde:
+            return True
+        return False
+
+    @wsapi.check(['FchVtoPago'])
+    def validate_service_payment_date(val, invoice, Concepto):
+        if Concepto not in [2, 3]:
+            return True
+        datetime.strptime(val, AFIP_DATE_FORMAT)
+        inv_date = invoice.date_invoice or fields.Date.context_today(invoice)
+        if val >= inv_date.replace('-', ''):
+            return True
+        return False
+
+    @wsapi.check(['CbteFch'])
+    def validate_invoice_date(val, invoice, Concepto):
+        if not val:
+            return True
+        today = fields.Date.context_today(invoice)
+        today_dt = datetime.strptime(today, DATE_FORMAT)
+        val_dt = datetime.strptime(val, AFIP_DATE_FORMAT)
+        offset = today_dt - val_dt
+        if Concepto in [2, 3]:
+            if abs(offset.days) > 10:
+                return False
+        else:
+            if abs(offset.days) > 5:
+                return False
+        return True
+
+    @wsapi.check(['MonCotiz'])
+    def validate_currency_rate(val, MonId):
+        if MonId == 'PES':
+            if val == 1:
+                return True
+        else:
+            if isinstance(val, float):
+                return True
         return False

@@ -7,7 +7,8 @@
 #    All Rights Reserved. See AUTHORS for details.
 #
 #    This program is free software: you can redistribute it and/or modify
-#    it under the terms of the GNU Affero General Public License as published by
+#    it under the terms of the GNU Affero General
+#    Public License as published by
 #    the Free Software Foundation, either version 3 of the License, or
 #    (at your option) any later version.
 #
@@ -22,27 +23,29 @@
 ##############################################################################
 
 from openerp import models, fields, api, _
-import openerp.addons.decimal_precision as dp
 import time
-from openerp.tools import DEFAULT_SERVER_DATE_FORMAT, DEFAULT_SERVER_DATETIME_FORMAT
 from openerp.exceptions import except_orm, Warning
-from datetime import datetime
 import logging
 
+from openerp.tools import DEFAULT_SERVER_DATE_FORMAT
+
 logger = logging.getLogger(__name__)
+
 
 class wsfe_massive_sinchronize(models.TransientModel):
     _name = 'wsfe.massive.sinchronize'
     _desc = 'WSFE Massive Sinchronize'
 
-    voucher_type = fields.Many2one('wsfe.voucher_type', 'Voucher Type', required=True)
+    voucher_type = fields.Many2one('wsfe.voucher_type', 'Voucher Type',
+                                   required=True)
     pos_id = fields.Many2one('pos.ar', 'POS', required=True)
 
     def _search_invoice(self, res):
         invoice_model = self.env['account.invoice']
 
         # TODO: Estamos repitiendo codigo. Limpiar.
-        doc_ids = self.env['res.document.type'].search([('afip_code', '=', res['DocTipo'])])
+        doc_ids = self.env['res.document.type'].search(
+            [('afip_code', '=', res['DocTipo'])])
         document_type = doc_ids and doc_ids[0] or False
 
         document_type = document_type
@@ -50,7 +53,7 @@ class wsfe_massive_sinchronize(models.TransientModel):
         amount_total = res['ImpTotal']
         amount_no_taxed = res['ImpTotConc']
         amount_taxed = res['ImpNeto']
-        #amount_tax = res['ImpIVA'] + res['ImpTrib']
+        # amount_tax = res['ImpIVA'] + res['ImpTrib']
         amount_exempt = res['ImpOpEx']
 
         domain = [
@@ -59,7 +62,7 @@ class wsfe_massive_sinchronize(models.TransientModel):
             ('amount_exempt', '=', amount_exempt),
             ('amount_taxed', '=', amount_taxed),
             ('amount_no_taxed', '=', amount_no_taxed),
-            ('state', 'in', ('draft','proforma2','proforma'))]
+            ('state', 'in', ('draft', 'proforma2', 'proforma'))]
 
         invoice_ids = invoice_model.search(domain)
 
@@ -80,12 +83,14 @@ class wsfe_massive_sinchronize(models.TransientModel):
 
         # Obtenemos el ultimo numero de factura
         # FIX: Corregir en el caso que sea una ND
-        last_invoice = invoice_model.search([('state', 'in', ('open', 'paid')),
-                              ('pos_ar_id', '=', self.pos_id.id),
-                              ('type', '=', self.voucher_type.document_type),
-                              ('is_debit_note', '=', self.voucher_type.document_type=='out_debit'),
-                              ('denomination_id', '=', self.voucher_type.denomination_id.id)],
-                              order='internal_number desc', limit=1)
+        last_invoice = invoice_model.search([
+            ('state', 'in', ('open', 'paid')),
+            ('pos_ar_id', '=', self.pos_id.id),
+            ('type', '=', self.voucher_type.document_type),
+            ('is_debit_note', '=',
+             self.voucher_type.document_type == 'out_debit'),
+            ('denomination_id', '=', self.voucher_type.denomination_id.id)],
+            order='internal_number desc', limit=1)
 
         # Buscamos la desincronizacion
         last_number = int(last_invoice.internal_number.split('-')[1])
@@ -93,7 +98,8 @@ class wsfe_massive_sinchronize(models.TransientModel):
 
         # Chequeamos si esta todo sincronizado
         if last_number == last_wsfe_number:
-            raise Warning(_('All voucher of this type and POS are sinchronized.'))
+            raise Warning(
+                _('All voucher of this type and POS are sinchronized.'))
 
         cr = self.env.cr
         for number in range(last_number+1, last_wsfe_number+1):
@@ -106,14 +112,17 @@ class wsfe_massive_sinchronize(models.TransientModel):
 
             # No se encontro la factura
             if not invoice:
-                raise except_orm(_('Voucher Not Found!'),
+                raise except_orm(
+                    _('Voucher Not Found!'),
                     _('Voucher %d of pos %s has not been found.') %
-                            (number, self.pos_id.name))
+                    (number, self.pos_id.name))
 
-            date_invoice = time.strftime(DEFAULT_SERVER_DATE_FORMAT,
-                           time.strptime(str(res['CbteFch']), '%Y%m%d'))
-            cae_due_date = time.strftime(DEFAULT_SERVER_DATE_FORMAT,
-                           time.strptime(str(res['FchVto']), '%Y%m%d'))
+            date_invoice = time.strftime(
+                DEFAULT_SERVER_DATE_FORMAT,
+                time.strptime(str(res['CbteFch']), '%Y%m%d'))
+            cae_due_date = time.strftime(
+                DEFAULT_SERVER_DATE_FORMAT,
+                time.strptime(str(res['FchVto']), '%Y%m%d'))
             cae = str(res['CodAutorizacion'])
 
             invoice.wsfe_relate_invoice(pos, number, date_invoice,
