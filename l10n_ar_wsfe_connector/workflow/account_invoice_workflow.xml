@@ -1,0 +1,43 @@
+<?xml version="1.0" encoding="utf-8"?>
+<openerp>
+    <data>
+
+        <record id="l10n_ar_wsfe.act_pre_open" model="workflow.activity">
+            <field name="action">
+                queue_invoice()
+            </field>
+        </record>
+
+        <record id="act_rejected" model="workflow.activity">
+            <field name="wkf_id" ref="account.wkf"/>
+            <field name="name">rejected</field>
+            <field name="action">write({'state': 'rejected'})</field>
+            <field name="kind">function</field>
+        </record>
+
+        <record id="trans_pre_to_open" model="workflow.transition">
+            <field name="act_from" ref="l10n_ar_wsfe.act_pre_open"/>
+            <field name="act_to" ref="account.act_open"/>
+            <field name="signal">approved_invoice</field>
+        </record>
+
+        <record id="trans_pre_to_draft" model="workflow.transition">
+            <field name="act_from" ref="l10n_ar_wsfe.act_pre_open"/>
+            <field name="act_to" ref="account.act_draft"/>
+            <field name="signal">error_invoice</field>
+        </record>
+
+        <record id="trans_pre_to_rejected" model="workflow.transition">
+            <field name="act_from" ref="l10n_ar_wsfe.act_pre_open"/>
+            <field name="act_to" ref="act_rejected"/>
+            <field name="signal">rejected_invoice</field>
+        </record>
+
+       <record id="trans_rejected_to_pre" model="workflow.transition">
+            <field name="act_from" ref="act_rejected"/>
+            <field name="act_to" ref="l10n_ar_wsfe.act_pre_open"/>
+            <field name="signal">invoice_open</field>
+        </record>
+
+    </data>
+</openerp>
