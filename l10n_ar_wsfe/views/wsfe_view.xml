@@ -28,7 +28,6 @@
                                         options="{'no_create_edit': True, 'no_quick_create': True}">
                                     <tree string="Points of Sale" editable="bottom">
                                         <field name="name" readonly="True"/>
-                                        <field name="denomination_id" readonly="True"/>
                                         <field name="priority" readonly="True"/>
                                         <field name="shop_id" readonly="True"/>
                                     </tree>

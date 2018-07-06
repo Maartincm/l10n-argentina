@@ -2,29 +2,13 @@
 <openerp>
     <data>
 
-<!--         <record id="act_pre_open" model="workflow.activity"> -->
-<!--             <field name="wkf_id" ref="account.wkf"/> -->
-<!--             <field name="name">preopen</field> -->
-<!--             <field name="action">action_date_assign() -->
-<!-- action_move_create() -->
-<!-- action_number() -->
-<!-- action_aut_cae()</field> -->
-<!--             <field name="kind">function</field> -->
-<!--         </record> -->
-
         <record id="act_pre_open" model="workflow.activity">
             <field name="wkf_id" ref="account.wkf"/>
             <field name="name">preopen</field>
-            <field name="action">
-                queue_invoice()
-            </field>
-            <field name="kind">function</field>
-        </record>
-
-        <record id="act_rejected" model="workflow.activity">
-            <field name="wkf_id" ref="account.wkf"/>
-            <field name="name">rejected</field>
-            <field name="action">write({'state': 'rejected'})</field>
+            <field name="action">action_date_assign()
+action_move_create()
+action_number()
+action_aut_cae()</field>
             <field name="kind">function</field>
         </record>
 
@@ -62,25 +46,6 @@
         <record id="trans_pre_to_open" model="workflow.transition">
             <field name="act_from" ref="act_pre_open"/>
             <field name="act_to" ref="account.act_open"/>
-            <field name="signal">approved_invoice</field>
-        </record>
-
-        <record id="trans_pre_to_draft" model="workflow.transition">
-            <field name="act_from" ref="act_pre_open"/>
-            <field name="act_to" ref="account.act_draft"/>
-            <field name="signal">error_invoice</field>
-        </record>
-
-        <record id="trans_pre_to_rejected" model="workflow.transition">
-            <field name="act_from" ref="act_pre_open"/>
-            <field name="act_to" ref="act_rejected"/>
-            <field name="signal">rejected_invoice</field>
-        </record>
-
-       <record id="trans_rejected_to_pre" model="workflow.transition">
-            <field name="act_from" ref="act_rejected"/>
-            <field name="act_to" ref="act_pre_open"/>
-            <field name="signal">invoice_open</field>
         </record>
 
     </data>

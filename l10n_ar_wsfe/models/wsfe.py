@@ -586,6 +586,7 @@ class wsfe_voucher_type(models.Model):
 
     @api.model
     def get_voucher_type(self, voucher):
+        voucher.ensure_one()
         # Chequeamos el modelo
         voucher_model = None
         model = voucher._table
@@ -596,7 +597,6 @@ class wsfe_voucher_type(models.Model):
             denomination_id = voucher.denomination_id.id
             type = voucher.type
             if type == 'out_invoice':
-                # TODO: Activar esto para ND
                 if voucher.is_debit_note:
                     type = 'out_debit'
 
