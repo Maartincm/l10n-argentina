@@ -23,5 +23,5 @@
 #
 ##############################################################################
 
-import wsfe_suds  # noqa
+import wsfe_easywsy  # noqa
 import wsfex_suds  # noqa

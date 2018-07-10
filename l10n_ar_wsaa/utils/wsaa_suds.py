@@ -1,7 +1,6 @@
 from lxml import etree
 from datetime import datetime
 import time
-import sys
 import email
 import urllib2
 from M2Crypto import BIO, SMIME
@@ -11,13 +10,13 @@ import logging
 from openerp.tools.misc import ustr
 import pytz
 
-## Configuracion del logger
+# Configuracion del logger
 logger = logging.getLogger('afipws')
 logger.setLevel(logging.DEBUG)
-#streamH = logging.StreamHandler(sys.stdout)
-#streamH.setLevel(logging.DEBUG)
-#streamH.setFormatter(formatter)
-#logger.addHandler(streamH)
+# streamH = logging.StreamHandler(sys.stdout)
+# streamH.setLevel(logging.DEBUG)
+# streamH.setFormatter(formatter)
+# logger.addHandler(streamH)
 
 
 class WSAA:
@@ -37,11 +36,11 @@ class WSAA:
         except urllib2.URLError, e:
             logger.error("No hay conexion disponible")
             self.connected = False
-            raise Exception, 'No se puede conectar con AFIP: %s' % str(e)
+            raise Exception('No se puede conectar con AFIP: %s' % str(e))
         except SAXParseException, e:
-            raise Exception, 'WSAA URL malformada: %s' % e.getMessage()
+            raise Exception('WSAA URL malformada: %s' % e.getMessage())
         except Exception, e:
-            raise Exception, 'Unknown Error: %s' % e
+            raise Exception('Unknown Error: %s' % e)
 
     def _create_client(self):
         # Creamos el cliente contra la URL
@@ -79,16 +78,16 @@ class WSAA:
         serv = etree.SubElement(root, 'service')
         serv.text = self.service
 
-#        try:
-#            f = open('tra.xml', 'w')
-#            doc.write(f, xml_declaration=True, encoding='UTF-8', pretty_print=True)
-#        except Exception, e:
-#            print 'No se puede grabar el archivo: %s' % e
-#            return None
+        # try:
+        #     f = open('tra.xml', 'w')
+        #     doc.write(f, xml_declaration=True, encoding='UTF-8',
+        #               pretty_print=True)
+        # except Exception, e:
+        #     print 'No se puede grabar el archivo: %s' % e
+        #     return None
 
         logger.debug("TRA Creado")
         return etree.tostring(doc)
-
 
     def _sign_tra(self, tra, cert, key):
         """Funcion que firma el tra."""
@@ -113,7 +112,6 @@ class WSAA:
                 logger.debug("TRA Firmado")
                 return part.get_payload(decode=False)
 
-
     def _call_wsaa(self, cms):
         """ Funcion para llamar al WSAA y loguearse """
 
@@ -124,7 +122,7 @@ class WSAA:
             except urllib2.URLError, e:
                 logger.warning("No hay conexion disponible")
                 self.connected = False
-                raise Exception, 'No hay conexion: %s' % e
+                raise Exception('No hay conexion: %s' % e)
 
         # Llamamos a loginCms y obtenemos el resultado
         logger.debug("Llamando a loginCms:\n%s", cms)
@@ -132,7 +130,7 @@ class WSAA:
             result = self.client.service.loginCms(cms)
         except Exception, e:
             logger.exception("Excepcion al llamar a loginCms")
-            raise Exception, 'Exception al autenticar: %s' % ustr(e)
+            raise Exception('Exception al autenticar: %s' % ustr(e))
 
         self.ta = result
         return result
@@ -155,12 +153,13 @@ class WSAA:
         header = root.find('header')
         exptime = header.find('expirationTime')
         exptime_iso = exptime.text[0:exptime.text.rfind('-')]
-        self.expiration_time = datetime.strptime(exptime_iso, '%Y-%m-%dT%H:%M:%S.%f')
+        self.expiration_time = datetime.strptime(exptime_iso,
+                                                 '%Y-%m-%dT%H:%M:%S.%f')
 
-         # Si no expiro, obtenemos el token y el sign
+        # Si no expiro, obtenemos el token y el sign
         cred = root.find('credentials')
-        self.token =  cred.find('token').text
-        self.sign =  cred.find('sign').text
+        self.token = cred.find('token').text
+        self.sign = cred.find('sign').text
 
         return True
 
@@ -184,10 +183,15 @@ class WSAA:
         self.parse_ta(self.ta)
         return True
 
-CERT = "/home/skennedy/proyectos/afipws/certs2012/eynes/cert_eynes.crt"        # El certificado X.509 obtenido de Seg. Inf.
-PRIVATEKEY = "/home/skennedy/proyectos/afipws/certs2012/eynes/privada_eynes.key"  # La clave privada del certificado CERT
-WSAAURL = "https://wsaahomo.afip.gov.ar/ws/services/LoginCms?wsdl" # homologacion (pruebas)
-#WSAAURL="https://wsaa.afip.gov.ar/ws/services/LoginCms?wsdl"
+
+# El certificado X.509 obtenido de Seg. Inf.
+CERT = "/home/skennedy/proyectos/afipws/certs2012/eynes/cert_eynes.crt"
+# La clave privada del certificado CERT
+PRIVATEKEY = "/home/skennedy/proyectos/afipws/certs2012/eynes/ \
+    privada_eynes.key"
+# homologacion (pruebas)
+WSAAURL = "https://wsaahomo.afip.gov.ar/ws/services/LoginCms?wsdl"
+# WSAAURL="https://wsaa.afip.gov.ar/ws/services/LoginCms?wsdl"
 
 if __name__ == '__main__':
     wsaa = WSAA(CERT, PRIVATEKEY, WSAAURL, "wsfe")

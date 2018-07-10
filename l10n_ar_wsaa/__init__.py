@@ -20,6 +20,6 @@
 #
 ##############################################################################
 
-import models # noqa
-import wizard # noqa
-import utils # noqa
+from . import models  # noqa
+from . import wizard  # noqa
+from . import utils  # noqa

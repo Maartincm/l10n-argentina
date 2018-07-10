@@ -177,8 +177,10 @@ class account_invoice(models.Model):
         return pos
 
     @api.multi
-    def _get_next_wsfe_number(self):
+    def _get_next_wsfe_number(self, conf=False):
         self.ensure_one()
+        if not conf:
+            conf = self.get_ws_conf()
         inv = self
         tipo_cbte = self._get_voucher_type()
         try:
@@ -187,21 +189,9 @@ class account_invoice(models.Model):
             err = _('El nombre del punto de venta tiene que ser numerico')
             raise except_orm(_('Error'), err)
 
-        ws = self.ws_auth()
-        data = {
-            'FECompUltimoAutorizado': {
-                'CbteTipo': tipo_cbte,
-                'PtoVta': pto_vta,
-            }
-        }
-        # TODO Make Checks
-        ws.add(data, no_check='all')
-        response = ws.request('FECompUltimoAutorizado')
-        res = ws.parse_response(response)
-        del(ws)
-        last = res['response'].CbteNro
+        last = conf.get_last_voucher(pto_vta, tipo_cbte)
 
-        return last + 1
+        return int(last + 1)
 
     @api.multi
     def get_next_invoice_number(self):
@@ -241,7 +231,7 @@ class account_invoice(models.Model):
         else:
             next_number = last_number[0] + 1
 
-        return next_number
+        return int(next_number)
 
     # Heredado para no cancelar si es una factura electronica
     @api.multi
@@ -290,18 +280,6 @@ class account_invoice(models.Model):
                 conf = self.get_ws_conf()
                 if conf:
                     invoice_vals['aut_cae'] = True
-                    fe_next_number = obj_inv._get_next_wsfe_number()
-
-                    # Si es homologacion, no hacemos el chequeo del numero
-                    if not conf.homologation:
-                        if fe_next_number != next_number:
-                            err = _("The next number [%d] does not " +
-                                    "corresponds to that obtained from AFIP " +
-                                    "WSFE [%d]") % (
-                                        int(next_number), int(fe_next_number))
-                            raise except_orm(_("WSFE Error!"), err)
-                    else:
-                        next_number = fe_next_number
 
                 # Si no es Factura Electronica...
                 else:
@@ -401,7 +379,7 @@ class account_invoice(models.Model):
                 return True
 
             self._sanitize_taxes(self)
-            ws = self.ws_auth()
+            ws = self.new_ws()
 
             try:
                 invoices_approved = ws.send_invoice(inv)
@@ -413,7 +391,9 @@ class account_invoice(models.Model):
                 # given by AFIP to prevent desynchronizations
                 self.env.cr.commit()
             except Exception as e:
-                raise e
+                err = _('Error received was: \n %s') % e
+                raise except_orm(
+                    _('WSFE Validation Error'), err)
             finally:
                 # Creamos el wsfe.request con otro cursor,
                 # porque puede pasar que
@@ -463,16 +443,25 @@ class account_invoice(models.Model):
 ###############################################################################
 
     @api.multi
-    def ws_auth(self):
+    def new_ws(self, conf=False):
+        if not conf:
+            conf = self.get_ws_conf()
+        ws = conf._webservice_class(conf.url)
+        return ws
+
+    @api.multi
+    def ws_auth(self, ws=False, conf=False):
         # TODO WSAA To easywsy and this could float between WSAA & WSFE
-        conf = self.get_ws_conf()
+        if not conf:
+            conf = self.get_ws_conf()
         token, sign = conf.wsaa_ticket_id.get_token_sign()
         auth = {
             'Token': token,
             'Sign': sign,
             'Cuit': conf.cuit
         }
-        ws = conf._webservice_class(conf.url)
+        if not ws:
+            ws = conf._webservice_class(conf.url)
         ws.login('Auth', auth)
         return ws
 
@@ -535,10 +524,12 @@ class account_invoice(models.Model):
 
         if confs:
             conf = confs[0]
-        else:
+        elif not ctx['without_raise']:
             err = _("There is no configuration for this " +
                     "POS %s") % pos_ar.name
             raise except_orm(_("WSFE Error"), err)
+        else:
+            conf = False
         return conf
 
     @api.multi
