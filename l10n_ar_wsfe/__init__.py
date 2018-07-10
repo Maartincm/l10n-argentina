@@ -24,4 +24,4 @@ import models  # noqa
 import wizard  # noqa
 import report  # noqa
 import wsfetools  # noqa
-import tests  # noqa
+# import tests  # noqa

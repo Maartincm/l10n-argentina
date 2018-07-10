@@ -23,8 +23,8 @@
 from openerp.osv import osv
 from openerp import models, fields, api
 from openerp.tools.translate import _
-from openerp.addons.l10n_ar_wsfe.wsfetools.wsfe_suds import WSFEv1 as wsfe
-from openerp.addons.l10n_ar_wsfe.wsfetools.wsfe2_suds import WSFE2
+# from openerp.addons.l10n_ar_wsfe.wsfetools.wsfe_suds import WSFEv1 as wsfe
+from openerp.addons.l10n_ar_wsfe.wsfetools.wsfe_easywsy import WSFE
 from datetime import datetime
 import time
 
@@ -53,7 +53,7 @@ class wsfe_config(models.Model):
     _name = "wsfe.config"
     _description = "Configuration for WSFE"
 
-    _webservice_class = WSFE2
+    _webservice_class = WSFE
 
     name = fields.Char('Name', size=64, required=True)
     cuit = fields.Char(related='company_id.partner_id.vat', string='Cuit')
@@ -164,14 +164,14 @@ class wsfe_config(models.Model):
 
         return msg
 
-    @api.one
-    def get_server_state(self):
-        conf = self
-        token, sign = conf.wsaa_ticket_id.get_token_sign()
-
-        _wsfe = wsfe(conf.cuit, token, sign, conf.url)
-        res = _wsfe.fe_dummy()
-        return res
+    # @api.one
+    # def get_server_state(self):
+    #     conf = self
+    #     token, sign = conf.wsaa_ticket_id.get_token_sign()
+    #
+    #     _wsfe = wsfe(conf.cuit, token, sign, conf.url)
+    #     res = _wsfe.fe_dummy()
+    #     return res
 
     @api.multi
     def _log_wsfe_request(self, pos, voucher_type_code, details, res):
@@ -237,128 +237,176 @@ class wsfe_config(models.Model):
 
         return wsfe_req_obj.create(vals)
 
-    @api.model
-    def get_last_voucher(self, pos, voucher_type):
-        self.ensure_one()
-
-        conf = self
-        token, sign = conf.wsaa_ticket_id.get_token_sign()
-
-        _wsfe = wsfe(conf.cuit, token, sign, conf.url)
-        res = _wsfe.fe_comp_ultimo_autorizado(pos, voucher_type)
-
-        self.check_errors(res)
-        self.check_observations(res)
-        last = res['response']
-        return last
-
-    @api.model
-    def get_voucher_info(self, pos, voucher_type, number):
-
-        conf = self
-        token, sign = conf.wsaa_ticket_id.get_token_sign()
-
-        _wsfe = wsfe(conf.cuit, token, sign, conf.url)
-        res = _wsfe.fe_comp_consultar(pos, voucher_type, number)
-
-        self.check_errors(res)
-        self.check_observations(res)
-        # last = res['response'].CbteNro
-
-        res = res['response']
-
-        result = {
-            'DocTipo': res[0].DocTipo,
-            'DocNro': res[0].DocNro,
-            'CbteDesde': res[0].CbteDesde,
-            'CbteHasta': res[0].CbteHasta,
-            'CbteFch': res[0].CbteFch,
-            'ImpTotal': res[0].ImpTotal,
-            'ImpTotConc': res[0].ImpTotConc,
-            'ImpNeto': res[0].ImpNeto,
-            'ImpOpEx': res[0].ImpOpEx,
-            'ImpTrib': res[0].ImpTrib,
-            'ImpIVA': res[0].ImpIVA,
-            'FchServDesde': res[0].FchServDesde,
-            'FchServHasta': res[0].FchServHasta,
-            'FchVtoPago': res[0].FchVtoPago,
-            'MonId': res[0].MonId,
-            'MonCotiz': res[0].MonCotiz,
-            'Resultado': res[0].Resultado,
-            'CodAutorizacion': res[0].CodAutorizacion,
-            'EmisionTipo': res[0].EmisionTipo,
-            'FchVto': res[0].FchVto,
-            'FchProceso': res[0].FchProceso,
-            'PtoVta': res[0].PtoVta,
-            'CbteTipo': res[0].CbteTipo,
+    @api.multi
+    def ws_auth(self):
+        # TODO This block is repeated, should persist only in WSAA, I think
+        token, sign = self.wsaa_ticket_id.get_token_sign()
+        auth = {
+            'Token': token,
+            'Sign': sign,
+            'Cuit': self.cuit
         }
-
-        return result
+        ws = self._webservice_class(self.url)
+        ws.login('Auth', auth)
+        return ws
 
     @api.multi
-    def read_tax(self):
+    def get_last_voucher(self, pos, voucher_type):
         self.ensure_one()
+        ws = self.ws_auth()
+        data = {
+            'FECompUltimoAutorizado': {
+                'CbteTipo': voucher_type,
+                'PtoVta': pos,
+            }
+        }
+        ws.add(data)
+        response = ws.request('FECompUltimoAutorizado')
+        res = ws.parse_response(response)
+        del(ws)
+        last = res['response'].CbteNro
+        return last
 
-        conf = self
-        token, sign = conf.wsaa_ticket_id.get_token_sign()
+    # Old
+    # @api.model
+    # def get_last_voucher(self, pos, voucher_type):
+    #     self.ensure_one()
+    #
+    #     conf = self
+    #     token, sign = conf.wsaa_ticket_id.get_token_sign()
+    #
+    #     _wsfe = wsfe(conf.cuit, token, sign, conf.url)
+    #     res = _wsfe.fe_comp_ultimo_autorizado(pos, voucher_type)
+    #
+    #     self.check_errors(res)
+    #     self.check_observations(res)
+    #     last = res['response']
+    #     return last
 
-        _wsfe = wsfe(conf.cuit, token, sign, conf.url)
-
-        # DEBUG
-        res = _wsfe.fe_dummy()
-
-        res = _wsfe.fe_param_get_tipos_iva()
-
-        wsfe_tax_obj = self.env['wsfe.tax.codes']
-
-        # Chequeamos los errores
-        msg = self.check_errors(res, raise_exception=False)
-        if msg:
-            # TODO: Hacer un wrapping de los errores, porque algunos son
-            # largos y se imprimen muy mal en pantalla
-            raise osv.except_osv(_('Error reading taxes'), msg)
-
-        # Armo un lista con los codigos de los Impuestos
-        for r in res['response']:
-            res_c = wsfe_tax_obj.search([('code', '=', r.Id)])
-
-            # Si tengo no los codigos de esos Impuestos en la db, los creo
-            if not len(res_c):
-                fd = datetime.strptime(r.FchDesde, '%Y%m%d')
-                try:
-                    td = datetime.strptime(r.FchHasta, '%Y%m%d')
-                except ValueError:
-                    td = False
-
-                create_vals = {
-                    'code': r.Id,
-                    'name': r.Desc,
-                    'to_date': td,
-                    'from_date': fd,
-                    'wsfe_config_id': self.id,
-                    'from_afip': True,
+    @api.multi
+    def get_voucher_info(self, pos, voucher_type, number):
+        self.ensure_one()
+        ws = self.ws_auth()
+        data = {
+            'FECompConsultar': {
+                'FeCompConsReq': {
+                    'CbteTipo': voucher_type,
+                    'CbteNro': number,
+                    'PtoVta': pos,
                 }
-                wsfe_tax_obj.create(create_vals)
-            # Si los codigos estan en la db los modifico
-            else:
-                fd = datetime.strptime(r.FchDesde, '%Y%m%d')
-                # 'NULL' ?? viene asi de fe_param_get_tipos_iva():
-                try:
-                    td = datetime.strptime(r.FchHasta, '%Y%m%d')
-                except ValueError:
-                    td = False
+            }
+        }
+        ws.add(data)
+        response = ws.request('FECompConsultar')
+        return response.ResultGet
 
-                write_vals = {
-                    'code': r.Id,
-                    'name': r.Desc,
-                    'to_date': td,
-                    'from_date': fd,
-                    'wsfe_config_id': self.id,
-                    'from_afip': True,
-                }
-                res_c.write(write_vals)
+    # @api.model
+    # def get_voucher_info(self, pos, voucher_type, number):
+    #
+    #     conf = self
+    #     token, sign = conf.wsaa_ticket_id.get_token_sign()
+    #
+    #     _wsfe = wsfe(conf.cuit, token, sign, conf.url)
+    #     res = _wsfe.fe_comp_consultar(pos, voucher_type, number)
+    #
+    #     self.check_errors(res)
+    #     self.check_observations(res)
+    #     # last = res['response'].CbteNro
+    #
+    #     res = res['response']
+    #
+    #     result = {
+    #         'DocTipo': res[0].DocTipo,
+    #         'DocNro': res[0].DocNro,
+    #         'CbteDesde': res[0].CbteDesde,
+    #         'CbteHasta': res[0].CbteHasta,
+    #         'CbteFch': res[0].CbteFch,
+    #         'ImpTotal': res[0].ImpTotal,
+    #         'ImpTotConc': res[0].ImpTotConc,
+    #         'ImpNeto': res[0].ImpNeto,
+    #         'ImpOpEx': res[0].ImpOpEx,
+    #         'ImpTrib': res[0].ImpTrib,
+    #         'ImpIVA': res[0].ImpIVA,
+    #         'FchServDesde': res[0].FchServDesde,
+    #         'FchServHasta': res[0].FchServHasta,
+    #         'FchVtoPago': res[0].FchVtoPago,
+    #         'MonId': res[0].MonId,
+    #         'MonCotiz': res[0].MonCotiz,
+    #         'Resultado': res[0].Resultado,
+    #         'CodAutorizacion': res[0].CodAutorizacion,
+    #         'EmisionTipo': res[0].EmisionTipo,
+    #         'FchVto': res[0].FchVto,
+    #         'FchProceso': res[0].FchProceso,
+    #         'PtoVta': res[0].PtoVta,
+    #         'CbteTipo': res[0].CbteTipo,
+    #     }
+    #
+    #     return result
 
-        return True
+    # @api.multi
+    # def read_tax(self):
+    #     self.ensure_one()
+    #
+    #     conf = self
+    #     token, sign = conf.wsaa_ticket_id.get_token_sign()
+    #
+    #     _wsfe = wsfe(conf.cuit, token, sign, conf.url)
+    #
+    #     # DEBUG
+    #     res = _wsfe.fe_dummy()
+    #
+    #     res = _wsfe.fe_param_get_tipos_iva()
+    #
+    #     wsfe_tax_obj = self.env['wsfe.tax.codes']
+    #
+    #     # Chequeamos los errores
+    #     msg = self.check_errors(res, raise_exception=False)
+    #     if msg:
+    #         # TODO: Hacer un wrapping de los errores, porque algunos son
+    #         # largos y se imprimen muy mal en pantalla
+    #         raise osv.except_osv(_('Error reading taxes'), msg)
+    #
+    #     # Armo un lista con los codigos de los Impuestos
+    #     for r in res['response']:
+    #         res_c = wsfe_tax_obj.search([('code', '=', r.Id)])
+    #
+    #         # Si tengo no los codigos de esos Impuestos en la db, los creo
+    #         if not len(res_c):
+    #             fd = datetime.strptime(r.FchDesde, '%Y%m%d')
+    #             try:
+    #                 td = datetime.strptime(r.FchHasta, '%Y%m%d')
+    #             except ValueError:
+    #                 td = False
+    #
+    #             create_vals = {
+    #                 'code': r.Id,
+    #                 'name': r.Desc,
+    #                 'to_date': td,
+    #                 'from_date': fd,
+    #                 'wsfe_config_id': self.id,
+    #                 'from_afip': True,
+    #             }
+    #             wsfe_tax_obj.create(create_vals)
+    #         # Si los codigos estan en la db los modifico
+    #         else:
+    #             fd = datetime.strptime(r.FchDesde, '%Y%m%d')
+    #             # 'NULL' ?? viene asi de fe_param_get_tipos_iva():
+    #             try:
+    #                 td = datetime.strptime(r.FchHasta, '%Y%m%d')
+    #             except ValueError:
+    #                 td = False
+    #
+    #             write_vals = {
+    #                 'code': r.Id,
+    #                 'name': r.Desc,
+    #                 'to_date': td,
+    #                 'from_date': fd,
+    #                 'wsfe_config_id': self.id,
+    #                 'from_afip': True,
+    #             }
+    #             res_c.write(write_vals)
+    #
+    #     return True
 
     @api.multi
     def prepare_details(self, invoices):

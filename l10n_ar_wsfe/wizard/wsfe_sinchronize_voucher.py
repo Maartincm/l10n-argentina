@@ -75,7 +75,11 @@ class wsfe_sinchronize_voucher(models.TransientModel):
         wsfe_conf = self.config_id
         ids = [p.id for p in wsfe_conf.point_of_sale_ids]
         denomination_id = self.voucher_type.denomination_id.id or False
-        domain = [('id', 'in', ids), ('denomination_id', '=', denomination_id)]
+        operator = 'in'
+        if not denomination_id:
+            operator = '='
+        domain = [('id', 'in', ids),
+                  ('denomination_ids', operator, denomination_id)]
         pos_ids = pos_model.search(domain)
         if len(pos_ids) == 1:
             self.pos_id = pos_ids[0]

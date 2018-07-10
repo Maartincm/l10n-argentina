@@ -32,7 +32,7 @@ class Event:
         return '%s (Evento %s)' % (self.msg, self.code)
 
 
-class WSFE2(WebService):
+class WSFE(WebService):
 
     def parse_invoices(self, invoices, first_number=False):
         reg_qty = len(invoices)
@@ -59,6 +59,9 @@ class WSFE2(WebService):
             if first_number:
                 nn = first_number + inv_index
             inv_data = self.parse_invoice(inv, number=nn)
+            inv_data['first_of_lot'] = False
+            if (first_number and nn == first_number) or len(invoices) == 1:
+                inv_data['first_of_lot'] = True
             details_array.append(inv_data)
         return data
 
@@ -391,12 +394,36 @@ class WSFE2(WebService):
         """
         return self.send_invoices(invoice, first_number=first_number)
 
-    def send_invoices(self, invoices, first_number=False):
+    def auth_decoy(self):
+        auth = {
+            'Token': 'T',
+            'Sign': 'S',
+            'Cuit': 'C',
+        }
+        self.login('Auth', auth)
+
+    def send_invoices(self, invoices, first_number=False, conf=False):
         invoices.complete_date_invoice()
         data = self.parse_invoices(invoices, first_number=first_number)
+        self.auth_decoy()
         from pprint import pprint as pp
         pp(data)
         self.add(data)
+        if not hasattr(self, 'auth') or not self.auth or \
+                self.auth.attrs['Token'] == 'T':
+            if not conf:
+                conf = invoices.get_ws_conf()
+            token, sign = conf.wsaa_ticket_id.get_token_sign()
+            auth = {
+                'Token': token,
+                'Sign': sign,
+                'Cuit': conf.cuit
+            }
+            self.login('Auth', auth)
+            auth_instance = getattr(self.data.FECAESolicitar,
+                                    self.auth._element_name)
+            for k, v in self.auth.attrs.items():
+                setattr(auth_instance, k, v)
         pp(self.data)
         response = self.request('FECAESolicitar')
         pp(response)
@@ -466,12 +493,24 @@ class WSFE2(WebService):
 # http://www.afip.gov.ar/fe/documentos/manual_desarrollador_COMPG_v2.pdf
 
     NATURALS = ['CantReg', 'CbteTipo', 'PtoVta', 'DocTipo', 'DocNro',
-                'CbteDesde', 'CbteHasta', 'Id']
+                'CbteHasta', 'CbteNro', 'Id']
 
     POSITIVE_REALS = ['ImpTotal', 'ImpTotConc', 'ImpNeto', 'ImpOpEx', 'ImpIVA',
                       'ImpTrib', 'BaseImp', 'Importe']
 
     STRINGS = ['MonId']
+
+    @wsapi.check(['CbteDesde'])
+    def validate_invoice_number(val, invoice, first_of_lot=True):
+        if first_of_lot:
+            conf = invoice.get_ws_conf()
+            fe_next_number = invoice._get_next_wsfe_number(conf=conf)
+
+            # Si es homologacion, no hacemos el chequeo del numero
+            if not conf.homologation:
+                if int(fe_next_number) != int(val):
+                    return False
+        return True
 
     @wsapi.check(NATURALS)
     def validate_natural_number(val):

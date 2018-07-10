@@ -72,8 +72,9 @@ class wsfe_massive_sinchronize(models.TransientModel):
 
         return False
 
-    @api.one
+    @api.multi
     def sinchronize(self):
+        self.ensure_one()
         wsfe_conf_model = self.env['wsfe.config']
         invoice_model = self.env['account.invoice']
 
@@ -102,6 +103,7 @@ class wsfe_massive_sinchronize(models.TransientModel):
                 _('All voucher of this type and POS are sinchronized.'))
 
         cr = self.env.cr
+        invoices = self.env['account.invoice']
         for number in range(last_number+1, last_wsfe_number+1):
             logger.info("Sincronizando comprobante %d" % number)
             res = conf.get_voucher_info(pos, voucher_type, number)
@@ -109,6 +111,7 @@ class wsfe_massive_sinchronize(models.TransientModel):
 
             # Buscamos una factura que coincida
             invoice = self._search_invoice(res)
+            invoices += invoice
 
             # No se encontro la factura
             if not invoice:
@@ -131,4 +134,16 @@ class wsfe_massive_sinchronize(models.TransientModel):
             if self.env.context.get('commit', True):
                 cr.commit()
 
-        return {'type': 'ir.actions.act_window_close'}
+        if invoices:
+            act_window = {
+                'name': _('Updated Invoices'),
+                'type': 'ir.actions.act_window',
+                'res_model': 'account.invoice',
+                'view_type': 'form',
+                'view_mode': 'tree,form',
+                'target': 'current',
+                'domain': [('id', 'in', invoices.ids)],
+            }
+            return act_window
+        else:
+            return {'type': 'ir.actions.act_window_close'}

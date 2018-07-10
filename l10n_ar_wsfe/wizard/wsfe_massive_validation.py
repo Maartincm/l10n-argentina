@@ -95,26 +95,25 @@ class AccountInvoiceConfirm(models.TransientModel):
                   "Invoices or all Customer Refund"))
 
         # Preparamos el lote de facturas para la AFIP
-        next_wsfe_number = invoices[0]._get_next_wsfe_number()
         next_system_number = invoices[0].get_next_invoice_number()
 
-        if not conf.homologation:
-            if next_wsfe_number != next_system_number:
-                raise except_orm(
-                    _("WSFE Error!"),
-                    _("The next number in the system [%d] does not match " +
-                      "the one obtained from AFIP WSFE [%d]") %
-                    (int(next_system_number), int(next_wsfe_number)))
+        # if not conf.homologation:
+        #     if next_wsfe_number != next_system_number:
+        #         raise except_orm(
+        #             _("WSFE Error!"),
+        #             _("The next number in the system [%d] does not match " +
+        #               "the one obtained from AFIP WSFE [%d]") %
+        #             (int(next_system_number), int(next_wsfe_number)))
 
         no_create_move = self.env.context.get('no_create_move', False)
         if not no_create_move:
             for inv in invoices:
                 inv.action_move_create()
 
-        ws = invoices.ws_auth()
+        ws = invoices.new_ws(conf=conf)
         try:
-            invoices_approved = ws.send_invoice(invoices,
-                                                first_number=next_wsfe_number)
+            invoices_approved = ws.send_invoice(
+                invoices, first_number=next_system_number)
 
             # Para las facturas aprobadas creo los asientos,
             # y seguimos adelante con el workflow
@@ -134,7 +133,9 @@ class AccountInvoiceConfirm(models.TransientModel):
                 invoice.signal_workflow('invoice_massive_open')
             self.env.cr.commit()
         except Exception as e:
-            raise e
+            err = _('Error received was: \n %s') % e
+            raise except_orm(
+                _('WSFE Validation Error'), err)
         finally:
             # Creamos el wsfe.request con otro cursor,
             # porque puede pasar que
