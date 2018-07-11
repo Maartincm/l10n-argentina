@@ -406,8 +406,6 @@ class WSFE(WebService):
         invoices.complete_date_invoice()
         data = self.parse_invoices(invoices, first_number=first_number)
         self.auth_decoy()
-        from pprint import pprint as pp
-        pp(data)
         self.add(data)
         if not hasattr(self, 'auth') or not self.auth or \
                 self.auth.attrs['Token'] == 'T':
@@ -424,9 +422,7 @@ class WSFE(WebService):
                                     self.auth._element_name)
             for k, v in self.auth.attrs.items():
                 setattr(auth_instance, k, v)
-        pp(self.data)
         response = self.request('FECAESolicitar')
-        pp(response)
         approved = self.parse_invoices_response(response)
         return approved
 
@@ -500,7 +496,7 @@ class WSFE(WebService):
 
     STRINGS = ['MonId']
 
-    @wsapi.check(['CbteDesde'])
+    @wsapi.check(['CbteDesde'], reraise=True, sequence=20)
     def validate_invoice_number(val, invoice, first_of_lot=True):
         if first_of_lot:
             conf = invoice.get_ws_conf()
@@ -509,7 +505,11 @@ class WSFE(WebService):
             # Si es homologacion, no hacemos el chequeo del numero
             if not conf.homologation:
                 if int(fe_next_number) != int(val):
-                    return False
+                    raise except_orm(
+                        _("WSFE Error!"),
+                        _("The next number in the system [%d] does not " +
+                          "match the one obtained from AFIP WSFE [%d]") %
+                        (int(val), int(fe_next_number)))
         return True
 
     @wsapi.check(NATURALS)
@@ -563,7 +563,7 @@ class WSFE(WebService):
             return True
         return False
 
-    @wsapi.check(['CbteFch'])
+    @wsapi.check(['CbteFch'], reraise=True)
     def validate_invoice_date(val, invoice, Concepto):
         if not val:
             return True
@@ -573,10 +573,16 @@ class WSFE(WebService):
         offset = today_dt - val_dt
         if Concepto in [2, 3]:
             if abs(offset.days) > 10:
-                return False
+                raise except_orm(
+                    _('WSFE Error!'),
+                    _('Invoice Date difference with today should be less ' +
+                      'than 5 days for product sales.'))
         else:
             if abs(offset.days) > 5:
-                return False
+                raise except_orm(
+                    _('WSFE Error!'),
+                    _('Invoice Date difference with today should be less ' +
+                      'than 5 days for product sales.'))
         return True
 
     @wsapi.check(['MonCotiz'])
