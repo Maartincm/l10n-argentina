@@ -390,8 +390,10 @@ class account_invoice(models.Model):
                 # Commit the info that was written to the invoice and
                 # given by AFIP to prevent desynchronizations
                 self.env.cr.commit()
+            except except_orm as e:
+                raise
             except Exception as e:
-                err = _('Error received was: \n %s') % e
+                err = _('Error received was: \n %s') % repr(e)
                 raise except_orm(
                     _('WSFE Validation Error'), err)
             finally:
