@@ -194,6 +194,30 @@ class account_invoice(models.Model):
         return int(last + 1)
 
     @api.multi
+    def get_last_date_invoice(self):
+        self.ensure_one()
+        q = """
+        SELECT MAX(date_invoice)
+        FROM account_invoice
+        WHERE internal_number ~ '^[0-9]{4}-[0-9]{8}$'
+            AND pos_ar_id = %(pos_id)s
+            AND state in %(state)s
+            AND type = %(type)s
+            AND is_debit_note = %(is_debit_note)s
+        """
+        q_vals = {
+            'pos_id': self.pos_ar_id.id,
+            'state': ('open', 'paid', 'cancel',),
+            'type': self.type,
+            'is_debit_note': self.is_debit_note,
+        }
+        self.env.cr.execute(q, q_vals)
+        last_date = self.env.cr.fetchone()
+        if last_date and last_date[0]:
+            last_date = last_date[0]
+        return last_date
+
+    @api.multi
     def get_next_invoice_number(self):
         """
         Funcion para obtener el siguiente numero de comprobante
