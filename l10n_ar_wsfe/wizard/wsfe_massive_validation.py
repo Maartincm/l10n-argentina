@@ -112,7 +112,7 @@ class AccountInvoiceConfirm(models.TransientModel):
 
         ws = invoices.new_ws(conf=conf)
         try:
-            invoices_approved = ws.send_invoice(
+            invoices_approved = ws.send_invoices(
                 invoices, first_number=next_system_number)
 
             # Para las facturas aprobadas creo los asientos,

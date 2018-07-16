@@ -567,9 +567,17 @@ class WSFE(WebService):
     def validate_invoice_date(val, invoice, Concepto):
         if not val:
             return True
+        val_dt = datetime.strptime(val, AFIP_DATE_FORMAT)
+        val_odoo_format = val_dt.strftime(DATE_FORMAT)
+        last_invoiced_date = invoice.get_last_date_invoice()
+        if last_invoiced_date and val_odoo_format < last_invoiced_date:
+            raise except_orm(
+                _('WSFE Error!'),
+                _('There is another Invoice with a most recent date [%s] ' +
+                  'for the same Point of Sale and Denomination.') %
+                last_invoiced_date)
         today = fields.Date.context_today(invoice)
         today_dt = datetime.strptime(today, DATE_FORMAT)
-        val_dt = datetime.strptime(val, AFIP_DATE_FORMAT)
         offset = today_dt - val_dt
         if Concepto in [2, 3]:
             if abs(offset.days) > 10:

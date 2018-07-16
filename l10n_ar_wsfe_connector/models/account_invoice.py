@@ -31,6 +31,14 @@ def register_electronic_invoice(session, model_name, record_id):
         self.signal_workflow('approved_invoice')
     except Exception as e:
         self.env.cr.rollback()
+        if self.move_id:
+            try:
+                move = self.move_id
+                self.move_id.state = 'draft'
+                self.move_id = False
+                move.unlink()
+            except MissingError:
+                pass
         self.signal_workflow('rejected_invoice')
         auto_refresh_kanban_list(self, 'connector', self.ids)
         self.env.cr.commit()
@@ -51,7 +59,10 @@ def validate_invoice(session, model_name, record_id):
         self.env.cr.rollback()
         if self.move_id:
             try:
-                self.move_id.unlink()
+                move = self.move_id
+                self.move_id.state = 'draft'
+                self.move_id = False
+                move.unlink()
             except MissingError:
                 pass
         self.signal_workflow('error_invoice')
@@ -122,8 +133,12 @@ class AccountInvoice(models.Model):
                                 new_t = ('state', triplet[1],
                                          triplet[2] + ['rejected'])
                             else:
-                                new_t = ('state', triplet[1],
-                                         triplet[2] + ',rejected')
+                                if triplet[1] == '=':
+                                    new_t = ('state', 'in',
+                                             [triplet[2], 'rejected'])
+                                elif triplet[1] in ['!=', '<>']:
+                                    new_t = ('state', 'not in',
+                                             [triplet[2], 'rejected'])
                             if modifiers and not attrs:
                                 new_t = list(new_t)
                             new_val.append(new_t)
@@ -131,11 +146,16 @@ class AccountInvoice(models.Model):
                             new_val.append(triplet)
                     mod_dict[attr] = new_val
                     mod_dict_str = str(mod_dict)
-                    if modifiers and not attrs:
+                    attrs_dict_str = str(mod_dict)
+                    if modifiers:
                         mod_dict_str = mod_dict_str.replace('True', 'true')
                         mod_dict_str = mod_dict_str.replace('False', 'false')
                         mod_dict_str = mod_dict_str.replace("'", "&quot;")
-                node.set((attrs and 'attrs') or 'modifiers', mod_dict_str)
+                        mod_dict_str = mod_dict_str.replace("(", "[")
+                        mod_dict_str = mod_dict_str.replace(")", "]")
+                if modifiers:
+                    node.set('modifiers', mod_dict_str)
+                node.set('attrs', attrs_dict_str)
         res['arch'] = etree.tostring(doc)
         res['arch'] = res['arch'].replace('&amp;', '&')  # ?
         return res

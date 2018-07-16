@@ -11,7 +11,7 @@
         <record id="act_rejected" model="workflow.activity">
             <field name="wkf_id" ref="account.wkf"/>
             <field name="name">rejected</field>
-            <field name="action">write({'state': 'rejected'})</field>
+            <field name="action">write({'state': 'rejected', 'internal_number': ''})</field>
             <field name="kind">function</field>
         </record>
 
