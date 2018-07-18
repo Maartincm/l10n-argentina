@@ -488,13 +488,29 @@ class WSFE(WebService):
 # AFIP Data Validation Methods According to:
 # http://www.afip.gov.ar/fe/documentos/manual_desarrollador_COMPG_v2.pdf
 
-    NATURALS = ['CantReg', 'CbteTipo', 'PtoVta', 'DocTipo', 'DocNro',
+    NATURALS = ['CantReg', 'CbteTipo', 'PtoVta', 'DocTipo',
                 'CbteHasta', 'CbteNro', 'Id']
 
     POSITIVE_REALS = ['ImpTotal', 'ImpTotConc', 'ImpNeto', 'ImpOpEx', 'ImpIVA',
                       'ImpTrib', 'BaseImp', 'Importe']
 
     STRINGS = ['MonId']
+
+    @wsapi.check(['DocNro'], reraise=True, sequence=20)
+    def validate_docnro(val, invoice, DocTipo):
+        if invoice.denomination_id.name == 'B':
+            if invoice.amount_total > 1000:
+                if not int(val):
+                    return False
+            else:
+                if int(DocTipo) == 99 and int(val):
+                    return False
+                elif int(DocTipo) != 99 and not int(val):
+                    return False
+        if invoice.denomination_id.name == 'A':
+            if not int(val):
+                return False
+        return True
 
     @wsapi.check(['CbteDesde'], reraise=True, sequence=20)
     def validate_invoice_number(val, invoice, first_of_lot=True):
