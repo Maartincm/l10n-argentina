@@ -111,7 +111,6 @@ class wsfe_massive_sinchronize(models.TransientModel):
 
             # Buscamos una factura que coincida
             invoice = self._search_invoice(res)
-            invoices += invoice
 
             # No se encontro la factura
             if not invoice:
@@ -119,6 +118,8 @@ class wsfe_massive_sinchronize(models.TransientModel):
                     _('Voucher Not Found!'),
                     _('Voucher %d of pos %s has not been found.') %
                     (number, self.pos_id.name))
+
+            invoices += invoice
 
             date_invoice = time.strftime(
                 DEFAULT_SERVER_DATE_FORMAT,

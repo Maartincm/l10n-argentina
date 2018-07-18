@@ -215,6 +215,8 @@ class account_invoice(models.Model):
         last_date = self.env.cr.fetchone()
         if last_date and last_date[0]:
             last_date = last_date[0]
+        else:
+            last_date = False
         return last_date
 
     @api.multi
@@ -405,6 +407,9 @@ class account_invoice(models.Model):
             self._sanitize_taxes(self)
             ws = self.new_ws()
 
+            new_cr = self.pool.cursor()
+            uid = self.env.user.id
+            ctx = self.env.context
             try:
                 invoices_approved = ws.send_invoice(inv)
 
@@ -426,10 +431,9 @@ class account_invoice(models.Model):
                 # tengamos una excepcion e igualmente,
                 # tenemos que escribir la request
                 # Sino al hacer el rollback se pierde hasta el wsfe.request
+                self.env.cr.rollback()
                 with api.Environment.manage():
-                    new_cr = self.pool.cursor()
-                    new_env = api.Environment(new_cr, self.env.user.id,
-                                              self.env.context)
+                    new_env = api.Environment(new_cr, uid, ctx)
                     ws.log_request(new_env)
                     new_cr.commit()
                     new_cr.close()
