@@ -99,10 +99,15 @@ class WSFE(WebService):
             invoice.partner_id.document_type_id.afip_code or '99'
         doc_num = invoice.partner_id.vat or '0'
 
-        currency_code = invoice.get_currency_code()
-        # Cotizacion
         company_id = invoice.env.user.company_id
         company_currency_id = company_id.currency_id
+
+        ars_cur = invoice.env.ref('base.ARS')
+        if invoice.currency_id == ars_cur:
+            currency_code = 'PES'
+        else:
+            currency_code = invoice.get_currency_code()
+        # Cotizacion
         invoice_rate = 1.0
         if invoice.currency_id.id != company_currency_id.id:
             invoice_rate = invoice.currency_rate
