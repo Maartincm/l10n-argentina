@@ -20,10 +20,9 @@
 #
 ##############################################################################
 
-from openerp.osv import osv
 from openerp import models, fields, api
 from openerp.tools.translate import _
-# from openerp.addons.l10n_ar_wsfe.wsfetools.wsfe_suds import WSFEv1 as wsfe
+from openerp.exceptions import except_orm
 from openerp.addons.l10n_ar_wsfe.wsfetools.wsfe_easywsy import WSFE
 from datetime import datetime
 import time
@@ -124,13 +123,13 @@ class wsfe_config(models.Model):
         # en este momento este usuario
         company_id = self.env.user.company_id.id
         if not company_id:
-            raise osv.except_osv(
+            raise except_orm(
                 _('Company Error!'),
                 _('There is no company being used by this user'))
 
         ids = self.search([('company_id', '=', company_id)])
         if not ids:
-            raise osv.except_osv(
+            raise except_orm(
                 _('WSFE Config Error!'),
                 _('There is no WSFE configuration set to this company'))
 
@@ -146,7 +145,7 @@ class wsfe_config(models.Model):
             msg = msg + ' Codigo/s Error:' + ' '.join(err_codes)
 
             if msg != '' and raise_exception:
-                raise osv.except_osv(_('WSFE Error!'), msg)
+                raise except_orm(_('WSFE Error!'), msg)
 
         return msg
 
@@ -343,6 +342,46 @@ class wsfe_config(models.Model):
     #
     #     return result
 
+    @api.multi
+    def read_tax(self):
+        self.ensure_one()
+        wsfe_tax_model = self.env['wsfe.tax.codes']
+        ws = self.ws_auth()
+        data = {
+            'FEParamGetTiposIva': {
+            }
+        }
+        ws.add(data, no_check="all")
+        response = ws.request('FEParamGetTiposIva')
+        err = self.check_errors(response, raise_exception=False)
+        if err:
+            raise except_orm(_("Error reading Taxes!"), err)
+        for tax in response[0][0]:
+            fd = datetime.strptime(tax.FchDesde, '%Y%m%d')
+            try:
+                td = datetime.strptime(tax.FchHasta, '%Y%m%d')
+            except ValueError:
+                td = False
+            vals = {
+                'code': tax.Id,
+                'name': tax.Desc,
+                'to_date': td,
+                'from_date': fd,
+                'wsfe_config_id': self.id,
+                'from_afip': True,
+            }
+
+            # Si no existe el impuesto en la DB, lo creamos de acuerdo a AFIP
+            tax = wsfe_tax_model.search([('code', '=', tax.Id)])
+            if not tax:
+                wsfe_tax_model.create(vals)
+
+            # Si los codigos estan en la db los modifico
+            else:
+                tax.write(vals)
+
+        return True
+
     # @api.multi
     # def read_tax(self):
     #     self.ensure_one()
@@ -364,7 +403,7 @@ class wsfe_config(models.Model):
     #     if msg:
     #         # TODO: Hacer un wrapping de los errores, porque algunos son
     #         # largos y se imprimen muy mal en pantalla
-    #         raise osv.except_osv(_('Error reading taxes'), msg)
+    #         raise except_orm(_('Error reading taxes'), msg)
     #
     #     # Armo un lista con los codigos de los Impuestos
     #     for r in res['response']:
@@ -446,7 +485,7 @@ class wsfe_config(models.Model):
                 concept = 3  # Productos y Servicios
 
             if not fiscal_position:
-                raise osv.except_osv(
+                raise except_orm(
                     _('Customer Configuration Error'),
                     _('There is no fiscal position configured for ' +
                       'the customer %s') % inv.partner_id.name)
@@ -455,7 +494,7 @@ class wsfe_config(models.Model):
             # cuenta que inv.number == 000X-00000NN o algo similar.
             if not inv.internal_number:
                 if not first_num:
-                    raise osv.except_osv(
+                    raise except_orm(
                         _("WSFE Error!"),
                         _("There is no first invoice number declared!"))
                 inv_number = first_num
@@ -476,7 +515,7 @@ class wsfe_config(models.Model):
 
             # company_currency_id = company.currency_id.id
             # if inv.currency_id.id != company_currency_id:
-            #     raise osv.except_osv(
+            #     raise except_orm(
             #         _("WSFE Error!"),
             #         _("Currency cannot be different to company currency. " +
             #           "Also check that company currency is ARS"))
@@ -502,7 +541,7 @@ class wsfe_config(models.Model):
                 [('currency_id', '=', inv.currency_id.id)])
 
             if not currency_code_ids:
-                raise osv.except_osv(
+                raise except_orm(
                     _("WSFE Error!"),
                     _("Currency has to be configured correctly " +
                       "in WSFEX Configuration."))
@@ -564,7 +603,7 @@ class wsfe_config(models.Model):
             # de redondeo
             prec = obj_precision.precision_get('Account')
             if round(importe_total, prec) != round(inv.amount_total, prec):
-                raise osv.except_osv(
+                raise except_orm(
                     _('Error in amount_total!'),
                     _("The total amount of the invoice does not " +
                       "corresponds to the total calculated.\n" +
@@ -655,13 +694,13 @@ class wsfe_voucher_type(models.Model):
             ])
 
             if not len(res):
-                raise osv.except_osv(
+                raise except_orm(
                     _("Voucher type error!"),
                     _("There is no voucher type that corresponds " +
                       "to this object"))
 
             if len(res) > 1:
-                raise osv.except_osv(
+                raise except_orm(
                     _("Voucher type error!"),
                     _("There is more than one voucher type that " +
                       "corresponds to this object"))

@@ -36,10 +36,10 @@
 							<page string="VAT Taxes">
 								<field name="vat_tax_ids" nolabel="1">
 									<tree string="Vat Taxes Mapping" editable="bottom">
-									  <field name="code"/>
-									  <field name="name"/>
-									  <field name="to_date"/>
-									  <field name="from_date"/>
+									  <field name="code" readonly="True"/>
+									  <field name="name" readonly="True"/>
+									  <field name="from_date" readonly="True"/>
+									  <field name="to_date" readonly="True"/>
 									  <field name="tax_id"/>
 									  <field name="tax_code_id"/>
 									  <field name="from_afip" readonly="True"/>
