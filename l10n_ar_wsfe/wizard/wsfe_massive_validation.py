@@ -142,7 +142,7 @@ class AccountInvoiceConfirm(models.TransientModel):
             # tengamos una excepcion e igualmente,
             # tenemos que escribir la request
             # Sino al hacer el rollback se pierde hasta el wsfe.request
-
+            self.env.cr.rollback()
             with api.Environment.manage():
                 new_cr = self.pool.cursor()
                 new_env = api.Environment(new_cr, self.env.user.id,
